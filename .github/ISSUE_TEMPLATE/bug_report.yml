@@ -1,0 +1,54 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. For security problems do **not** use this form; see SECURITY.md.
+        Remove every secret (tokens, passwords, API keys, full invitation or reset links) from what you paste.
+  - type: input
+    id: jellyfin
+    attributes:
+      label: Jellyfin version
+      placeholder: "12.1.0"
+    validations:
+      required: true
+  - type: input
+    id: mailconcierge
+    attributes:
+      label: Mail Concierge version
+      placeholder: "0.2.0.0"
+    validations:
+      required: true
+  - type: input
+    id: proxy
+    attributes:
+      label: Reverse proxy
+      description: Product and version, and whether Known Proxies is set in Jellyfin. Write "none" if there is no proxy.
+      placeholder: "nginx 1.27, Known Proxies set"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Client
+      description: Browser or app, with version (web, Swiftfin, Android TV, ...).
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant Jellyfin log lines, with secrets removed. Tokens can appear in URLs, so check before pasting.
+      render: text

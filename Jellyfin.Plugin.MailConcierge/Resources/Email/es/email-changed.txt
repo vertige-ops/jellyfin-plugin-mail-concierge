@@ -1,0 +1,14 @@
+Subject: La dirección de correo de su cuenta de {{serverName}} ha cambiado
+
+Hola {{username}}:
+
+La dirección de correo de su cuenta en {{serverName}} se acaba de sustituir por otra. Le enviamos este mensaje a su dirección anterior.
+
+Si ha sido usted, no tiene que hacer nada. Si no ha sido usted:
+
+1. Cancele este cambio con el enlace de abajo (válido hasta el {{expires}}).
+2. Después cambie su contraseña con «¿Olvidó su contraseña?» en la página de inicio de sesión.
+3. Avise al administrador de {{serverName}}.
+
+Enlace para cancelar:
+{{cancelLink}}

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Die E-Mail-Adresse Ihres Kontos bei {{serverName}} wurde geändert</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f4">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4">
+    <tr>
+      <td align="center" style="padding:24px 12px">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:8px">
+          {{logoRow}}
+          <tr>
+            <td style="padding:32px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.5;color:#222222">
+      <p style="margin:0 0 16px">Hallo {{username}},</p>
+      <p style="margin:0 0 16px">die E-Mail-Adresse Ihres Kontos bei {{serverName}} wurde soeben durch eine andere ersetzt. Diese Nachricht geht an Ihre bisherige Adresse.</p>
+      <p style="margin:0 0 8px"><strong>Wenn Sie es waren, müssen Sie nichts tun. Wenn nicht:</strong></p>
+      <ol style="margin:0 0 24px;padding-left:24px"><li style="margin:0 0 6px">Machen Sie diese Änderung mit dem Link unten rückgängig (gültig bis zum {{expires}}).</li><li style="margin:0 0 6px">Ändern Sie anschließend Ihr Passwort über „Passwort vergessen“ auf der Anmeldeseite.</li><li style="margin:0 0 6px">Informieren Sie den Administrator von {{serverName}}.</li></ol>
+      <p style="margin:0 0 24px"><a href="{{cancelLink}}" style="display:inline-block;background:#00a4dc;color:#ffffff;text-decoration:none;font-weight:bold;padding:14px 28px;border-radius:6px">Diese Änderung rückgängig machen</a></p>
+      <p style="margin:0 0 4px;font-size:14px;color:#555555">Falls die Schaltfläche nicht funktioniert, kopieren Sie diesen Link in Ihren Browser:</p>
+      <p style="margin:0 0 24px;font-size:14px;word-break:break-all"><a href="{{cancelLink}}" style="color:#006b8f">{{cancelLink}}</a></p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

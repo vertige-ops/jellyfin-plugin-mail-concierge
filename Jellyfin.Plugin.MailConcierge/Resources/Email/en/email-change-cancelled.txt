@@ -1,0 +1,11 @@
+Subject: An e-mail change on your {{serverName}} account was cancelled
+
+Hello {{username}},
+
+The e-mail address change of your account on {{serverName}} was just cancelled, using the link sent to the previous address and your password. The previous address is back, and you are receiving this message at the address it replaced.
+
+If it was you, there is nothing to do. If it wasn't you:
+
+1. Change your password right away, using “Forgot password” on the sign-in page.
+2. Tell the administrator of {{serverName}}.
+3. Check that nobody else has access to your mailbox.

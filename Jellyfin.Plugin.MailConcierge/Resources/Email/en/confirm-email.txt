@@ -1,0 +1,12 @@
+Subject: Confirm your e-mail address on {{serverName}}
+
+Hello {{username}},
+
+This e-mail address was just entered for your account on {{serverName}}. It will be used to recover your password if you forget it.
+
+To confirm it, open this link:
+{{link}}
+
+This link is valid until {{expires}}.
+
+If this wasn't you, you can ignore this message: the address will not be used.

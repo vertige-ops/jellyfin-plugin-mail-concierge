@@ -1,0 +1,13 @@
+<h1 id="form-title">{{s:page.cancel.title}}</h1>
+<form id="action-form" class="form" data-step="form">
+<p>{{s:page.cancel.intro}}</p>
+<label for="password">{{s:page.cancel.password}}</label>
+<input id="password" name="password" type="password" autocomplete="current-password" required>
+<p id="msg" class="error" role="alert" hidden></p>
+<button id="submit" type="submit" class="button">{{s:page.cancel.submit}}</button>
+</form>
+<section id="done" class="done" hidden>
+<h1>{{s:page.cancel.success.title}}</h1>
+<p>{{s:page.cancel.success}}</p>
+<a class="button" href="{{base}}/web/#/login">{{s:page.signin}}</a>
+</section>

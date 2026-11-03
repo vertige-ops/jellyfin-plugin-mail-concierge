@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>La dirección de correo de su cuenta de {{serverName}} ha cambiado</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f4">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4">
+    <tr>
+      <td align="center" style="padding:24px 12px">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:8px">
+          {{logoRow}}
+          <tr>
+            <td style="padding:32px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.5;color:#222222">
+      <p style="margin:0 0 16px">Hola {{username}}:</p>
+      <p style="margin:0 0 16px">La dirección de correo de su cuenta en {{serverName}} se acaba de sustituir por otra. Le enviamos este mensaje a su dirección anterior.</p>
+      <p style="margin:0 0 8px"><strong>Si ha sido usted, no tiene que hacer nada. Si no ha sido usted:</strong></p>
+      <ol style="margin:0 0 24px;padding-left:24px"><li style="margin:0 0 6px">Cancele este cambio con el enlace de abajo (válido hasta el {{expires}}).</li><li style="margin:0 0 6px">Después cambie su contraseña con «¿Olvidó su contraseña?» en la página de inicio de sesión.</li><li style="margin:0 0 6px">Avise al administrador de {{serverName}}.</li></ol>
+      <p style="margin:0 0 24px"><a href="{{cancelLink}}" style="display:inline-block;background:#00a4dc;color:#ffffff;text-decoration:none;font-weight:bold;padding:14px 28px;border-radius:6px">Cancelar este cambio</a></p>
+      <p style="margin:0 0 4px;font-size:14px;color:#555555">Si el botón no funciona, copie este enlace en su navegador:</p>
+      <p style="margin:0 0 24px;font-size:14px;word-break:break-all"><a href="{{cancelLink}}" style="color:#006b8f">{{cancelLink}}</a></p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

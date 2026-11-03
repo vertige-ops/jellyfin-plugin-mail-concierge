@@ -1,0 +1,21 @@
+---
+name: "Mail Concierge"
+guid: "4643600e-9108-4342-8cdd-1ebb049bc033"
+version: "12.0.0.0"
+targetAbi: "12.1.0.0"
+framework: "net10.0"
+overview: "E-mail invitations and e-mail password recovery for Jellyfin"
+description: >
+  Mail Concierge lets administrators invite people by e-mail and lets users
+  recover their password by e-mail, without any change to Jellyfin itself.
+  E-mail is the only channel.
+category: "General"
+imageUrl: "https://raw.githubusercontent.com/vertige-ops/jellyfin-plugin-mail-concierge/main/assets/brand/catalog-thumb.svg"
+owner: "vertige-ops"
+artifacts:
+- "Jellyfin.Plugin.MailConcierge.dll"
+- "MailKit.dll"
+- "MimeKit.dll"
+- "BouncyCastle.Cryptography.dll"
+changelog: >
+  First public release: e-mail invitations, e-mail password recovery, e-mail address in the profile, optional Seerr synchronisation, English, French, Spanish and German.

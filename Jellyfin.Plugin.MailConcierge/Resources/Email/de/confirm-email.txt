@@ -1,0 +1,12 @@
+Subject: Bestätigen Sie Ihre E-Mail-Adresse bei {{serverName}}
+
+Hallo {{username}},
+
+diese E-Mail-Adresse wurde soeben für Ihr Konto bei {{serverName}} angegeben. Sie dient dazu, Ihr Passwort zurückzusetzen, falls Sie es vergessen.
+
+Öffnen Sie zur Bestätigung diesen Link:
+{{link}}
+
+Dieser Link ist bis zum {{expires}} gültig.
+
+Wenn Sie diese Anfrage nicht gestellt haben, können Sie diese Nachricht ignorieren: Die Adresse wird nicht verwendet.

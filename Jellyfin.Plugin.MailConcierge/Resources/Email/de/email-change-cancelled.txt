@@ -1,0 +1,11 @@
+Subject: Eine E-Mail-Änderung Ihres Kontos bei {{serverName}} wurde rückgängig gemacht
+
+Hallo {{username}},
+
+die Änderung der E-Mail-Adresse Ihres Kontos bei {{serverName}} wurde soeben über den an die bisherige Adresse gesendeten Link und mit Ihrem Passwort rückgängig gemacht. Die bisherige Adresse ist wiederhergestellt, und diese Nachricht geht an die Adresse, durch die sie ersetzt worden war.
+
+Wenn Sie es waren, müssen Sie nichts tun. Wenn nicht:
+
+1. Ändern Sie sofort Ihr Passwort über „Passwort vergessen“ auf der Anmeldeseite.
+2. Informieren Sie den Administrator von {{serverName}}.
+3. Stellen Sie sicher, dass niemand sonst Zugriff auf Ihr E-Mail-Postfach hat.

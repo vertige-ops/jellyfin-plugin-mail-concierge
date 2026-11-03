@@ -1,0 +1,12 @@
+Subject: Sie sind zu {{serverName}} eingeladen
+
+Hallo,
+
+Sie sind eingeladen, {{serverName}} beizutreten, um Filme und Serien anzusehen.
+
+Öffnen Sie zum Erstellen Ihres Kontos diesen Link:
+{{link}}
+
+Dort wählen Sie Ihren Benutzernamen und Ihr Passwort. Dieser Link ist bis zum {{expires}} gültig.
+
+Wenn Sie {{serverName}} nicht kennen, können Sie diese Nachricht ignorieren.

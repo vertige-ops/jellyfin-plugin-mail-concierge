@@ -1,0 +1,14 @@
+Subject: Die E-Mail-Adresse Ihres Kontos bei {{serverName}} wurde geändert
+
+Hallo {{username}},
+
+die E-Mail-Adresse Ihres Kontos bei {{serverName}} wurde soeben durch eine andere ersetzt. Diese Nachricht geht an Ihre bisherige Adresse.
+
+Wenn Sie es waren, müssen Sie nichts tun. Wenn nicht:
+
+1. Machen Sie diese Änderung mit dem Link unten rückgängig (gültig bis zum {{expires}}).
+2. Ändern Sie anschließend Ihr Passwort über „Passwort vergessen“ auf der Anmeldeseite.
+3. Informieren Sie den Administrator von {{serverName}}.
+
+Link zum Rückgängigmachen:
+{{cancelLink}}

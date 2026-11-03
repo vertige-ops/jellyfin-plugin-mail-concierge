@@ -1,0 +1,11 @@
+Subject: Se ha cancelado un cambio de correo de su cuenta de {{serverName}}
+
+Hola {{username}}:
+
+El cambio de dirección de correo de su cuenta en {{serverName}} se acaba de cancelar mediante el enlace enviado a la dirección anterior y su contraseña. Se ha restablecido la dirección anterior, y usted recibe este mensaje en la dirección que la había sustituido.
+
+Si ha sido usted, no tiene que hacer nada. Si no ha sido usted:
+
+1. Cambie su contraseña de inmediato con «¿Olvidó su contraseña?» en la página de inicio de sesión.
+2. Avise al administrador de {{serverName}}.
+3. Compruebe que nadie más tiene acceso a su buzón de correo.

@@ -1,0 +1,12 @@
+{
+  "name": "mailconcierge-client-tests",
+  "private": true,
+  "description": "Tests of the script injected in the Jellyfin web client (Resources/Client/mailconcierge-client.js).",
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-timeout=30000"
+  },
+  "devDependencies": {
+    "jsdom": "24.1.3"
+  }
+}

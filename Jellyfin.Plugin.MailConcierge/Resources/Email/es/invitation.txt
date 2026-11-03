@@ -1,0 +1,12 @@
+Subject: Invitación a {{serverName}}
+
+Hola:
+
+Le invitamos a unirse a {{serverName}} para ver películas y series.
+
+Para crear su cuenta, abra este enlace:
+{{link}}
+
+Allí elegirá su nombre de usuario y su contraseña. Este enlace es válido hasta el {{expires}}.
+
+Si no conoce {{serverName}}, puede ignorar este mensaje.

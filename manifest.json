@@ -1,0 +1,11 @@
+[
+  {
+    "guid": "4643600e-9108-4342-8cdd-1ebb049bc033",
+    "name": "Mail Concierge",
+    "description": "Mail Concierge lets administrators invite people by e-mail and lets users recover their password by e-mail, without any change to Jellyfin itself.",
+    "overview": "E-mail invitations and e-mail password recovery for Jellyfin",
+    "owner": "vertige-ops",
+    "category": "General",
+    "versions": []
+  }
+]

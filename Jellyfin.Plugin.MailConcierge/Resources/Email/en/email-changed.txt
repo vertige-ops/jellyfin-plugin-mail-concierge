@@ -1,0 +1,14 @@
+Subject: The e-mail address of your {{serverName}} account was changed
+
+Hello {{username}},
+
+The e-mail address of your account on {{serverName}} has just been replaced by another one. You are receiving this message at the old address.
+
+If it was you, there is nothing to do. If it wasn't you:
+
+1. Cancel this change with the link below (valid until {{expires}}).
+2. Then change your password, using “Forgot password” on the sign-in page.
+3. Tell the administrator of {{serverName}}.
+
+Link to cancel:
+{{cancelLink}}

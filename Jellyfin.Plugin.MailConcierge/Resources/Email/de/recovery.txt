@@ -1,0 +1,16 @@
+Subject: Ändern Sie Ihr Passwort bei {{serverName}}
+
+Hallo {{username}},
+
+Sie haben die Änderung Ihres Passworts bei {{serverName}} angefordert.
+
+Ihr PIN-Code: {{pin}}
+
+Wenn Sie die Seite „Passwort vergessen“ geöffnet gelassen haben, geben Sie diesen Code dort ein.
+
+Öffnen Sie andernfalls einfach diesen Link, um ein neues Passwort zu wählen:
+{{link}}
+
+Der Code und der Link sind bis {{expires}} Uhr gültig und funktionieren nur einmal. Geben Sie sie an niemanden weiter.
+
+Wenn Sie diese Anfrage nicht gestellt haben, können Sie diese Nachricht ignorieren: Es wird nichts geändert.

@@ -1,0 +1,12 @@
+Subject: Confirme su dirección de correo en {{serverName}}
+
+Hola {{username}}:
+
+Esta dirección de correo se acaba de indicar para su cuenta en {{serverName}}. Servirá para recuperar su contraseña si la olvida.
+
+Para confirmarla, abra este enlace:
+{{link}}
+
+Este enlace es válido hasta el {{expires}}.
+
+Si usted no ha hecho esta solicitud, puede ignorar este mensaje: la dirección no se utilizará.

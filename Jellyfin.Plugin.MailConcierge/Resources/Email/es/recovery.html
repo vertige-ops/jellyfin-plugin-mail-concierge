@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cambie su contraseña en {{serverName}}</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f4">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4">
+    <tr>
+      <td align="center" style="padding:24px 12px">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:8px">
+          {{logoRow}}
+          <tr>
+            <td style="padding:32px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.5;color:#222222">
+      <p style="margin:0 0 16px">Hola {{username}}:</p>
+      <p style="margin:0 0 16px">Ha solicitado cambiar su contraseña en {{serverName}}.</p>
+      <p style="margin:0 0 8px">Su código PIN:</p>
+      <p style="margin:0 0 16px;font-size:28px;font-weight:bold;letter-spacing:4px;font-family:Consolas,Menlo,monospace">{{pin}}</p>
+      <p style="margin:0 0 24px">Si ha dejado abierta la página «¿Olvidó su contraseña?», escriba este código en la pantalla.</p>
+      <p style="margin:0 0 24px"><a href="{{link}}" style="display:inline-block;background:#00a4dc;color:#ffffff;text-decoration:none;font-weight:bold;padding:14px 28px;border-radius:6px">Elegir una nueva contraseña</a></p>
+      <p style="margin:0 0 4px;font-size:14px;color:#555555">Si el botón no funciona, copie este enlace en su navegador:</p>
+      <p style="margin:0 0 24px;font-size:14px;word-break:break-all"><a href="{{link}}" style="color:#006b8f">{{link}}</a></p>
+      <p style="margin:0 0 16px">El código y el enlace son válidos hasta las {{expires}} y solo funcionan una vez. No se los comunique a nadie.</p>
+      <p style="margin:24px 0 0;font-size:14px;color:#555555">Si usted no ha hecho esta solicitud, puede ignorar este mensaje: no se modificará nada.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

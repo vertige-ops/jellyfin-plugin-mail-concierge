@@ -1,0 +1,12 @@
+Subject: Vous êtes invité(e) sur {{serverName}}
+
+Bonjour,
+
+Vous êtes invité(e) à rejoindre {{serverName}}, pour regarder films et séries.
+
+Pour créer votre compte, ouvrez ce lien :
+{{link}}
+
+Vous y choisirez votre nom d'utilisateur et votre mot de passe. Ce lien est valable jusqu'au {{expires}}.
+
+Si vous ne connaissez pas {{serverName}}, vous pouvez ignorer ce message.

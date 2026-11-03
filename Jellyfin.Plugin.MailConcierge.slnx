@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Jellyfin.Plugin.MailConcierge/Jellyfin.Plugin.MailConcierge.csproj" />
+  <Project Path="Jellyfin.Plugin.MailConcierge.Tests/Jellyfin.Plugin.MailConcierge.Tests.csproj" />
+</Solution>

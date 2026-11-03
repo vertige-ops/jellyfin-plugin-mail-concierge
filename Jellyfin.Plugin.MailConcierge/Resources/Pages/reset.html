@@ -1,0 +1,16 @@
+<h1 id="form-title">{{s:page.reset.title}}</h1>
+<form id="reset-form" class="form" data-step="form" novalidate>
+<p>{{s:page.reset.intro}}</p>
+<label for="password">{{s:page.reset.password}}</label>
+<input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required>
+<p class="hint">{{s:page.reset.hint}}</p>
+<label for="confirm">{{s:page.reset.confirm}}</label>
+<input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="8" required>
+<p id="msg" class="error" role="alert" hidden></p>
+<button id="submit" type="submit" class="button">{{s:page.reset.submit}}</button>
+</form>
+<section id="done" class="done" hidden>
+<h1>{{s:page.reset.success.title}}</h1>
+<p>{{s:page.reset.success}}</p>
+<a class="button" href="{{base}}/web/#/login">{{s:page.signin}}</a>
+</section>

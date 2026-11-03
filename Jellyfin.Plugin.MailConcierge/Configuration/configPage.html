@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Mail Concierge</title>
+</head>
+<body>
+    <div id="MailConciergeConfigPage" data-role="page" data-title="Mail Concierge" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
+        <!-- Inside the page element: Jellyfin keeps only this element of a plugin page, so styles in <head> are dropped. -->
+        <style>
+            #MailConciergeConfigPage .ucWarn { color: #ffb74d; }
+            #MailConciergeConfigPage .ucHelp { display: inline-block; position: relative; margin-left: 0.5em; width: 1.3em; height: 1.3em; line-height: 1.3em; text-align: center; border: 1px solid currentColor; border-radius: 50%; font-size: 0.8em; font-style: normal; font-weight: bold; cursor: help; opacity: 0.8; }
+            /* The help icon sits right after the label text; a checkbox label only spans its box and text, so the icon is outside its click area. */
+            #MailConciergeConfigPage .ucHelpRow { display: flex; align-items: center; margin-bottom: 0.25em; }
+            #MailConciergeConfigPage .ucHelpRow > label { width: auto; margin-bottom: 0; }
+            #MailConciergeConfigPage .ucHelpRow > .selectLabel { flex-basis: auto; }
+            #MailConciergeConfigPage .ucHelpField { flex: none; z-index: 2; }
+            #MailConciergeConfigPage .ucHelp::before { content: "i"; }
+            #MailConciergeConfigPage .ucHelp:hover, #MailConciergeConfigPage .ucHelp:focus { opacity: 1; outline: 2px solid #00a4dc; outline-offset: 2px; }
+            #MailConciergeConfigPage .ucHelp::after { content: attr(data-tip); display: none; position: absolute; z-index: 10; left: 0; top: 1.9em; width: 18em; max-width: 70vw; padding: 0.6em 0.8em; background: #202020; color: #fff; border: 1px solid #00a4dc; border-radius: 4px; font-size: 1.15em; font-weight: normal; line-height: 1.4; text-align: left; white-space: normal; }
+            #MailConciergeConfigPage .ucHelp:hover::after, #MailConciergeConfigPage .ucHelp:focus::after { display: block; }
+        </style>
+        <div data-role="content">
+            <div class="content-primary">
+                <h2 data-t="title"></h2>
+
+                <div id="ucBanner" role="alert" hidden style="padding:0.8em 1em;margin:1em 0;border:1px solid #ff8a80;color:#ff8a80"></div>
+                <div id="ucMailBanner" role="status" hidden style="padding:0.8em 1em;margin:1em 0;border:1px solid #ffd180;color:#ffd180"></div>
+
+                <div class="ucTabBar" role="tablist" style="display:flex;flex-wrap:wrap;gap:0.4em;margin:1em 0">
+                    <button is="emby-button" type="button" class="raised emby-button ucTabBtn" role="tab" id="ucTabBtn-general" data-tab="general" aria-controls="ucTab-general"><span data-t="tabGeneral"></span></button>
+                    <button is="emby-button" type="button" class="raised emby-button ucTabBtn" role="tab" id="ucTabBtn-smtp" data-tab="smtp" aria-controls="ucTab-smtp"><span data-t="tabSmtp"></span></button>
+                    <button is="emby-button" type="button" class="raised emby-button ucTabBtn" role="tab" id="ucTabBtn-templates" data-tab="templates" aria-controls="ucTab-templates"><span data-t="tabTemplates"></span></button>
+                    <button is="emby-button" type="button" class="raised emby-button ucTabBtn" role="tab" id="ucTabBtn-seerr" data-tab="seerr" aria-controls="ucTab-seerr"><span data-t="tabSeerr"></span></button>
+                    <button is="emby-button" type="button" class="raised emby-button ucTabBtn" role="tab" id="ucTabBtn-accounts" data-tab="accounts" aria-controls="ucTab-accounts"><span data-t="tabAccounts"></span></button>
+                    <button is="emby-button" type="button" class="raised emby-button ucTabBtn" role="tab" id="ucTabBtn-invitations" data-tab="invitations" aria-controls="ucTab-invitations"><span data-t="tabInvitations"></span></button>
+                </div>
+
+                <div class="ucTab" id="ucTab-general" role="tabpanel" aria-labelledby="ucTabBtn-general" hidden>
+                    <form data-tab-form="general">
+                    <h3 data-t="secGeneral"></h3>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input data-f="enabled" type="checkbox" is="emby-checkbox" /><span data-t="enabled"></span></label>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input data-f="nativeForgotPassword" type="checkbox" is="emby-checkbox" /><span data-t="native"></span></label>
+                        <div class="fieldDescription checkboxFieldDescription" data-t="nativeHint"></div>
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="publicUrl"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.publicUrl"></span></div>
+                        <input data-f="publicUrl" type="url" is="emby-input" autocomplete="off" />
+                        <div class="fieldDescription" data-t="publicUrlHint"></div>
+                        <div id="ucWarnPublicUrl" class="fieldDescription ucWarn" role="status" data-t="warnHttpPublicUrl" hidden>This URL starts with http://: the links in e-mails will travel unencrypted.</div>
+                    </div>
+                    <div class="selectContainer">
+                        <div class="ucHelpRow"><label class="selectLabel" data-t="defaultLanguage"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.defaultLanguage"></span></div>
+                        <select is="emby-select" data-f="defaultLanguage" class="emby-select-withcolor emby-select">
+                        </select>
+                        <div class="fieldDescription" data-t="defaultLanguageHint"></div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <div class="ucHelpRow"><label class="emby-checkbox-label"><input data-f="allowAdministrators" type="checkbox" is="emby-checkbox" /><span data-t="allowAdmins"></span></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.allowAdministrators"></span></div>
+                        <div class="fieldDescription checkboxFieldDescription" data-t="allowAdminsHint"></div>
+                    </div>
+                    <div class="selectContainer">
+                        <div class="ucHelpRow"><label class="selectLabel" data-t="sessions"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.sessionsOnReset"></span></div>
+                        <select is="emby-select" data-f="sessionsOnReset" class="emby-select-withcolor emby-select">
+                            <option value="All" data-t="sessAll"></option>
+                            <option value="InactiveSinceDays" data-t="sessInactive"></option>
+                            <option value="None" data-t="sessNone"></option>
+                        </select>
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="sessionDays"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.sessionDays"></span></div>
+                        <input data-f="sessionInactiveDays" type="number" is="emby-input" min="1" />
+                    </div>
+
+                    <h3 data-t="secDurations" style="margin-top:2em"></h3>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="invitationDays"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.invitationDays"></span></div>
+                        <input data-f="invitationDays" type="number" is="emby-input" min="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="pinMinutes"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.pinMinutes"></span></div>
+                        <input data-f="pinMinutes" type="number" is="emby-input" min="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="confirmationHours"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.confirmationHours"></span></div>
+                        <input data-f="confirmationHours" type="number" is="emby-input" min="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="cancelHours"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.cancelHours"></span></div>
+                        <input data-f="cancelEmailChangeHours" type="number" is="emby-input" min="1" />
+                    </div>
+
+                    <h3 data-t="secLimits" style="margin-top:2em"></h3>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxRecoveryHour"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxRecoveryHour"></span></div>
+                        <input data-f="maxRecoveryEmailsPerHour" type="number" is="emby-input" min="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxInvitationHour"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxInvitationHour"></span></div>
+                        <input data-f="maxInvitationEmailsPerHour" type="number" is="emby-input" min="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxAccountHour"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxAccountHour"></span></div>
+                        <input data-f="maxAccountEmailsPerHour" type="number" is="emby-input" min="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxAccount"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxAccount"></span></div>
+                        <input data-f="maxRecoveryEmailsPerAccountPerHour" type="number" is="emby-input" min="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxIp"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxIp"></span></div>
+                        <input data-f="maxForgotRequestsPerIpPer15Min" type="number" is="emby-input" min="1" />
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxPin"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxPin"></span></div>
+                        <input data-f="maxPinFailures" type="number" is="emby-input" min="1" />
+                    </div>
+
+                    <p id="ucError-general" style="color:#ff8a80" role="alert" hidden></p>
+                    <p id="ucSaved-general" role="status" hidden></p>
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span data-t="save"></span></button>
+                    </div>
+                    </form>
+                </div>
+
+                <div class="ucTab" id="ucTab-smtp" role="tabpanel" aria-labelledby="ucTabBtn-smtp" hidden>
+                    <form data-tab-form="smtp">
+                    <h3 data-t="secSmtp"></h3>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" data-t="smtpHost"></label>
+                        <input data-f="smtpHost" type="text" is="emby-input" autocomplete="off" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" data-t="smtpPort"></label>
+                        <input data-f="smtpPort" type="number" is="emby-input" min="1" max="65535" />
+                    </div>
+                    <div class="selectContainer">
+                        <div class="ucHelpRow"><label class="selectLabel" data-t="smtpSecurity"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.smtpSecurity"></span></div>
+                        <select is="emby-select" data-f="smtpSecurity" class="emby-select-withcolor emby-select">
+                            <option value="StartTls">STARTTLS</option>
+                            <option value="SslOnConnect">SSL/TLS</option>
+                            <option value="None" data-t="secNone"></option>
+                        </select>
+                        <div id="ucWarnSmtp" class="fieldDescription ucWarn" role="status" data-t="warnSmtpNone" hidden>Security “None”: e-mails and the SMTP password travel unencrypted.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" data-t="smtpUser"></label>
+                        <input data-f="smtpUsername" type="text" is="emby-input" autocomplete="off" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" data-t="smtpPassword"></label>
+                        <input data-f="smtpPassword" data-secret="smtpPasswordSet" type="password" is="emby-input" autocomplete="new-password" />
+                        <div class="fieldDescription" data-t="secretHint"></div>
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="fromAddress"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.fromAddress"></span></div>
+                        <input data-f="fromAddress" type="email" is="emby-input" autocomplete="off" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" data-t="fromName"></label>
+                        <input data-f="fromName" type="text" is="emby-input" autocomplete="off" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" data-t="testTo"></label>
+                        <input id="ucTestTo" type="email" is="emby-input" autocomplete="off" />
+                        <div class="fieldDescription" data-t="testHint"></div>
+                    </div>
+                    <button is="emby-button" type="button" class="raised emby-button" id="ucTest"><span data-t="testSend"></span></button>
+                    <p id="ucTestResult" hidden></p>
+
+                    <p id="ucError-smtp" style="color:#ff8a80" role="alert" hidden></p>
+                    <p id="ucSaved-smtp" role="status" hidden></p>
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span data-t="save"></span></button>
+                    </div>
+                    </form>
+                </div>
+
+                <div class="ucTab" id="ucTab-templates" role="tabpanel" aria-labelledby="ucTabBtn-templates" hidden>
+                    <form data-tab-form="templates">
+                    <h3><span data-t="secTemplates"></span><span class="ucHelp" tabindex="0" role="img" aria-label="" data-help="help.templates"></span></h3>
+                    <p class="fieldDescription" data-t="templatesHint"></p>
+                    <p class="fieldDescription" id="ucTemplatesLang"></p>
+                    <div id="ucTemplates"></div>
+
+                    <p id="ucError-templates" style="color:#ff8a80" role="alert" hidden></p>
+                    <p id="ucSaved-templates" role="status" hidden></p>
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span data-t="save"></span></button>
+                    </div>
+                    </form>
+                </div>
+
+                <div class="ucTab" id="ucTab-seerr" role="tabpanel" aria-labelledby="ucTabBtn-seerr" hidden>
+                    <form data-tab-form="seerr">
+                    <h3 data-t="secSeerr"></h3>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input data-f="seerrEnabled" type="checkbox" is="emby-checkbox" /><span data-t="seerrEnabled"></span></label>
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="seerrUrl"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.seerrUrl"></span></div>
+                        <input data-f="seerrUrl" type="url" is="emby-input" autocomplete="off" />
+                        <div id="ucWarnSeerr" class="fieldDescription ucWarn" role="status" data-t="warnHttpSeerr" hidden>This URL starts with http://: the Seerr API key will travel unencrypted.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="seerrKey"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.seerrApiKey"></span></div>
+                        <input data-f="seerrApiKey" data-secret="seerrApiKeySet" type="password" is="emby-input" autocomplete="new-password" />
+                        <div class="fieldDescription" data-t="secretHint"></div>
+                    </div>
+
+                    <p id="ucError-seerr" style="color:#ff8a80" role="alert" hidden></p>
+                    <p id="ucSaved-seerr" role="status" hidden></p>
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span data-t="save"></span></button>
+                    </div>
+                    </form>
+                <h3 data-t="secSeerrTools"></h3>
+                <p class="fieldDescription" data-t="seerrToolsHint"></p>
+                <button is="emby-button" type="button" class="raised emby-button" id="ucSync"><span data-t="syncNow"></span></button>
+                <button is="emby-button" type="button" class="raised emby-button" id="ucPreview"><span data-t="preview"></span></button>
+                <p id="ucSeerrResult" hidden></p>
+                <div id="ucImportBox" hidden>
+                    <table style="width:100%;margin:1em 0;text-align:left">
+                        <thead><tr><th></th><th data-t="colUser"></th><th data-t="colSeerr"></th><th data-t="colCurrent"></th></tr></thead>
+                        <tbody id="ucImportRows"></tbody>
+                    </table>
+                    <button is="emby-button" type="button" class="raised emby-button" id="ucImport"><span data-t="importSelected"></span></button>
+                </div>
+
+                </div>
+
+                <div class="ucTab" id="ucTab-accounts" role="tabpanel" aria-labelledby="ucTabBtn-accounts" hidden>
+                <h3><span data-t="secAssign"></span><span class="ucHelp" tabindex="0" role="img" aria-label="" data-help="help.assignProvider"></span></h3>
+                <p class="fieldDescription" data-t="assignHint"></p>
+                <button is="emby-button" type="button" class="raised emby-button" id="ucAssign"><span data-t="assign"></span></button>
+                <p id="ucAssignResult" hidden></p>
+                </div>
+
+                <div class="ucTab" id="ucTab-invitations" role="tabpanel" aria-labelledby="ucTabBtn-invitations" hidden>
+                    <h3 data-t="inv.title"></h3>
+                    <form id="ucInvForm">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="ucInvUsername" data-t="inv.username"></label>
+                            <input id="ucInvUsername" type="text" is="emby-input" autocomplete="off" required />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="ucInvEmail" data-t="inv.email"></label>
+                            <input id="ucInvEmail" type="email" is="emby-input" autocomplete="off" />
+                            <div class="fieldDescription" data-t="inv.emailHint"></div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="ucInvDays" data-t="inv.days"></label>
+                            <input id="ucInvDays" type="number" is="emby-input" min="1" max="365" />
+                        </div>
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="ucInvLanguage" data-t="inv.language"></label>
+                            <select is="emby-select" id="ucInvLanguage" class="emby-select-withcolor emby-select">
+                            </select>
+                        </div>
+                        <div>
+                            <h3 data-t="inv.libraries"></h3>
+                            <label id="ucInvSelectAllRow" style="display:none;margin:0.4em 0">
+                                <input id="ucInvSelectAll" type="checkbox" style="margin-right:0.6em" />
+                                <span data-t="inv.selectAll"></span>
+                            </label>
+                            <div id="ucInvLibraries"></div>
+                        </div>
+                        <p id="ucInvError" style="color:#ff8a80" role="alert" hidden></p>
+                        <div>
+                            <button is="emby-button" type="submit" class="raised button-submit block emby-button" id="ucInvSubmit">
+                                <span></span>
+                            </button>
+                        </div>
+                    </form>
+
+                    <div id="ucInvResult" hidden style="margin-top:1.5em">
+                        <p id="ucInvResultText"></p>
+                        <div class="inputContainer">
+                            <input id="ucInvLink" type="text" is="emby-input" readonly />
+                        </div>
+                        <button is="emby-button" type="button" class="raised block emby-button" id="ucInvCopy">
+                            <span data-t="inv.copy"></span>
+                        </button>
+                    </div>
+
+                    <h3 data-t="inv.list" style="margin-top:2em"></h3>
+                    <p id="ucInvEmpty" data-t="inv.empty" hidden></p>
+                    <div id="ucInvList"></div>
+                </div>
+            </div>
+        </div>
+        <script type="text/javascript">
+            (function () {
+                'use strict';
+
+                var PLUGIN_ID = '4643600e-9108-4342-8cdd-1ebb049bc033';
+                var TEMPLATE_NAMES = ['invitation', 'recovery', 'confirm-email', 'email-changed', 'password-changed'];
+                var EXTENSIONS = ['html', 'txt'];
+                var TABS = ['general', 'smtp', 'templates', 'seerr'];
+                var languages = [];
+
+                // Minimal English fallback; the full texts come from the server (MailConcierge/Admin/Strings), in the language of the user.
+                var FALLBACK = {
+                    title: 'Mail Concierge',
+                    save: 'Save',
+                    saved: 'Settings saved.',
+                    errGeneric: 'Something went wrong.',
+                    'inv.title': 'Invitations',
+                    'inv.send': 'Send',
+                    'inv.copyLink': 'Copy link',
+                    'inv.errGeneric': 'Something went wrong.',
+                    'inv.selectAll': 'Select all'
+                };
+
+                // Reason codes of the proxy guard, resolved here so the banner is localized.
+                var REASONS = { unknown_proxy: 'proxyUnknown' };
+
+                var page = document.querySelector('#MailConciergeConfigPage');
+                var s = FALLBACK;
+                var defaults = {};
+                var loadedOverrides = {};
+                // Language of the page (and default language of an invitation).
+                var invLang = 'en';
+
+                function $(id) { return page.querySelector('#' + id); }
+
+                // The display language as is (else the browser one): the server picks the closest supported language.
+                function pickLanguage() {
+                    var candidates = [];
+                    try {
+                        // jellyfin-web keeps the display language in localStorage ("<userId>-language", or "language").
+                        var userId = window.ApiClient && window.ApiClient.getCurrentUserId ? window.ApiClient.getCurrentUserId() : null;
+                        if (userId) {
+                            candidates.push(window.localStorage.getItem(userId + '-language'));
+                        }
+                        candidates.push(window.localStorage.getItem('language'));
+                    } catch (e) { /* not available */ }
+                    candidates.push(document.documentElement.getAttribute('lang'));
+                    try {
+                        if (window.Globalize && typeof window.Globalize.locale === 'function') {
+                            var locale = window.Globalize.locale();
+                            candidates.push(typeof locale === 'string' ? locale : (locale && locale.locale));
+                        }
+                    } catch (e) { /* not available */ }
+                    candidates.push(navigator.language);
+                    for (var i = 0; i < candidates.length; i++) {
+                        if (candidates[i]) {
+                            return String(candidates[i]);
+                        }
+                    }
+                    return '';
+                }
+
+                // The texts of the settings and the ones of the Invitations tab (keys prefixed "inv.").
+                function loadStrings() {
+                    var wanted = encodeURIComponent(pickLanguage());
+                    return Promise.all([
+                        api('GET', 'MailConcierge/Admin/Strings?page=config&lang=' + wanted),
+                        api('GET', 'MailConcierge/Admin/Strings?page=invitations&lang=' + wanted)
+                    ]).then(function (r) {
+                        var merged = Object.assign({}, FALLBACK, r[0] && r[0].strings);
+                        var invStrings = (r[1] && r[1].strings) || {};
+                        Object.keys(invStrings).forEach(function (key) { merged['inv.' + key] = invStrings[key]; });
+                        s = merged;
+                        invLang = (r[0] && r[0].language) || 'en';
+                    }, function () { s = FALLBACK; });
+                }
+
+                // Textareas hold LF line endings whatever the source had: compare with LF on both sides.
+                function lf(text) { return String(text === null || text === undefined ? '' : text).replace(/\r\n?/g, '\n'); }
+
+                function applyStrings() {
+                    Array.prototype.forEach.call(page.querySelectorAll('[data-t]'), function (el) {
+                        var text = s[el.getAttribute('data-t')];
+                        if (typeof text === 'string') {
+                            el.textContent = text;
+                        }
+                    });
+                    applyHelp();
+                }
+
+                // The (i) icons: the text is accessible name and the CSS tooltip (no native title: it would show a second bubble) (hover and focus).
+                function applyHelp() {
+                    Array.prototype.forEach.call(page.querySelectorAll('[data-help]'), function (el) {
+                        var text = s[el.getAttribute('data-help')];
+                        if (typeof text === 'string') {
+                            el.setAttribute('aria-label', text);
+                            el.setAttribute('data-tip', text);
+                        }
+                    });
+                }
+
+                function show(id, text, isError) {
+                    var el = $(id);
+                    el.textContent = text || '';
+                    el.hidden = !text;
+                    if (isError !== undefined) {
+                        el.style.color = isError ? '#ff8a80' : '';
+                    }
+                }
+
+                function api(method, path, body) {
+                    var options = { type: method, url: ApiClient.getUrl(path), dataType: 'json' };
+                    if (body !== undefined) {
+                        options.data = JSON.stringify(body);
+                        options.contentType = 'application/json';
+                    }
+                    return ApiClient.ajax(options);
+                }
+
+                function errorOf(response) {
+                    if (!response || typeof response.json !== 'function') {
+                        return Promise.resolve(s.errGeneric);
+                    }
+                    return response.json().then(function (json) {
+                        return (json && s['err.' + json.code]) || s.errGeneric;
+                    }, function () { return s.errGeneric; });
+                }
+
+                function fields(tab) { return page.querySelectorAll(tab ? '#ucTab-' + tab + ' [data-f]' : '[data-f]'); }
+
+                function currentLanguage() {
+                    var select = page.querySelector('select[data-f="defaultLanguage"]');
+                    return (select && select.value) || '';
+                }
+
+                // Keeps the edits of the displayed templates in loadedOverrides (the working copy of all overrides).
+                function syncTemplates() {
+                    Array.prototype.forEach.call($('ucTemplates').querySelectorAll('textarea'), function (area) {
+                        var key = area.getAttribute('data-key');
+                        // Equal to the shipped template (or empty) = no override.
+                        if (area.value.trim() && lf(area.value) !== lf(defaults[key])) {
+                            loadedOverrides[key] = area.value;
+                        } else {
+                            delete loadedOverrides[key];
+                        }
+                    });
+                }
+
+                // only: the id of a tab to refill (the others keep their unsaved edits).
+                // Non-blocking warnings under the fields whose current value sends secrets or links in clear text.
+                function updateWarnings() {
+                    function isHttp(name) { return /^\s*http:\/\//i.test(page.querySelector('[data-f="' + name + '"]').value); }
+                    $('ucWarnPublicUrl').hidden = !isHttp('publicUrl');
+                    $('ucWarnSeerr').hidden = !isHttp('seerrUrl');
+                    $('ucWarnSmtp').hidden = page.querySelector('[data-f="smtpSecurity"]').value !== 'None';
+                }
+
+                function fill(config, only) {
+                    if (!only) {
+                        languages = config.languages || [];
+                        var select = page.querySelector('select[data-f="defaultLanguage"]');
+                        select.textContent = '';
+                        var invSelect = $('ucInvLanguage');
+                        invSelect.textContent = '';
+                        languages.forEach(function (language) {
+                            [select, invSelect].forEach(function (target) {
+                                var option = document.createElement('option');
+                                option.value = language.code;
+                                option.textContent = language.name;
+                                target.appendChild(option);
+                            });
+                        });
+                        invSelect.value = invLang;
+                    }
+                    // The validity of an invitation starts at the configured default.
+                    if ((!only || only === 'general') && config.invitationDays > 0) {
+                        $('ucInvDays').value = config.invitationDays;
+                    }
+                    Array.prototype.forEach.call(fields(only), function (el) {
+                        var key = el.getAttribute('data-f');
+                        if (el.type === 'checkbox') {
+                            el.checked = !!config[key];
+                        } else if (el.getAttribute('data-secret')) {
+                            el.value = '';
+                            el.placeholder = config[el.getAttribute('data-secret')] ? s.secretSet : '';
+                        } else {
+                            el.value = config[key] === null || config[key] === undefined ? '' : config[key];
+                        }
+                    });
+                    updateWarnings();
+                    if (!only || only === 'templates') {
+                        loadedOverrides = Object.assign({}, config.templateOverrides || {});
+                        buildTemplates();
+                    }
+                }
+
+                // Only the keys of the tab: the server leaves absent keys unchanged. Secrets only when typed.
+                function collect(tab) {
+                    var body = {};
+                    Array.prototype.forEach.call(fields(tab), function (el) {
+                        var key = el.getAttribute('data-f');
+                        if (el.type === 'checkbox') {
+                            body[key] = el.checked;
+                        } else if (el.getAttribute('data-secret')) {
+                            if (el.value) { body[key] = el.value; }
+                        } else if (el.type === 'number') {
+                            var n = parseInt(el.value, 10);
+                            body[key] = isNaN(n) ? 0 : n;
+                        } else {
+                            body[key] = el.value;
+                        }
+                    });
+                    if (tab === 'templates') {
+                        // The server replaces the whole set when it is present: send every language (the other ones as loaded).
+                        syncTemplates();
+                        body.templateOverrides = Object.assign({}, loadedOverrides);
+                    }
+                    return body;
+                }
+
+                // Textareas for the e-mail language chosen in the General tab (its current value, saved or not).
+                function buildTemplates() {
+                    var box = $('ucTemplates');
+                    box.textContent = '';
+                    var lang = currentLanguage();
+                    var name = '';
+                    languages.forEach(function (language) { if (language.code === lang) { name = language.name; } });
+                    show('ucTemplatesLang', name ? fmt(s.templatesLang || '{0}', name) : '');
+                    if (!name) { return; }
+                    TEMPLATE_NAMES.forEach(function (tname) {
+                        EXTENSIONS.forEach(function (ext) {
+                            var key = lang + '/' + tname + '.' + ext;
+                            var details = document.createElement('details');
+                            details.style.margin = '0.4em 0';
+                            var summary = document.createElement('summary');
+                            summary.textContent = key;
+                            var area = document.createElement('textarea');
+                            area.setAttribute('data-key', key);
+                            area.rows = 12;
+                            area.style.cssText = 'width:100%;font-family:monospace;box-sizing:border-box';
+                            area.value = lf(Object.prototype.hasOwnProperty.call(loadedOverrides, key) ? loadedOverrides[key] : defaults[key]);
+                            var reset = document.createElement('button');
+                            reset.type = 'button';
+                            reset.setAttribute('is', 'emby-button');
+                            reset.className = 'raised emby-button';
+                            var span = document.createElement('span');
+                            span.textContent = s.resetDefault;
+                            reset.appendChild(span);
+                            reset.addEventListener('click', function () { area.value = lf(defaults[key]); });
+                            details.appendChild(summary);
+                            details.appendChild(area);
+                            details.appendChild(reset);
+                            box.appendChild(details);
+                        });
+                    });
+                }
+
+                function selectTab(id) {
+                    Array.prototype.forEach.call(page.querySelectorAll('.ucTab'), function (el) { el.hidden = el.id !== 'ucTab-' + id; });
+                    Array.prototype.forEach.call(page.querySelectorAll('.ucTabBtn'), function (el) {
+                        var on = el.getAttribute('data-tab') === id;
+                        el.setAttribute('aria-selected', on ? 'true' : 'false');
+                        el.style.opacity = on ? '1' : '0.6';
+                        el.style.fontWeight = on ? 'bold' : '';
+                    });
+                    try { window.sessionStorage.setItem(TAB_KEY, id); } catch (e) { /* not available */ }
+                    // The link of a new invitation is shown once: it does not follow the administrator from tab to tab.
+                    $('ucInvResult').hidden = true;
+                }
+
+                // Shared with Resources/Client/mailconcierge-client.js (invite icon of the Users page): keep the key in sync.
+                var TAB_KEY = 'mailconcierge.cfgTab';
+
+                function restoreTab() {
+                    var id = 'general';
+                    try { id = window.sessionStorage.getItem(TAB_KEY) || id; } catch (e) { /* not available */ }
+                    if (!/^[a-z]+$/.test(id) || !page.querySelector('#ucTab-' + id)) { id = 'general'; }
+                    selectTab(id);
+                }
+
+                function loadStatus() {
+                    return api('GET', 'MailConcierge/Admin/Status').then(function (status) {
+                        var key = status.proxyGuardTripped ? (REASONS[status.reason] || 'proxyUnknown') : null;
+                        show('ucBanner', key ? s[key] : '');
+                        show('ucMailBanner', status.canSendEmail ? '' : s.mailOff);
+                    });
+                }
+
+                // Save buttons stay disabled until a load succeeded, so an empty tab can never be saved.
+                var loaded = false;
+
+                function setSaveEnabled(on) {
+                    loaded = on;
+                    Array.prototype.forEach.call(page.querySelectorAll('form[data-tab-form] button[type="submit"]'), function (b) { b.disabled = !on; });
+                }
+
+                function load(only) {
+                    Dashboard.showLoadingMsg();
+                    return Promise.all([api('GET', 'MailConcierge/Admin/Templates'), api('GET', 'MailConcierge/Admin/Config'), loadStatus()]).then(function (r) {
+                        defaults = r[0] || {};
+                        fill(r[1], only);
+                        setSaveEnabled(true);
+                        Dashboard.hideLoadingMsg();
+                    }, function (e) {
+                        Dashboard.hideLoadingMsg();
+                        setSaveEnabled(false);
+                        return errorOf(e).then(function (t) {
+                            var visible = page.querySelector('.ucTab:not([hidden])');
+                            var tab = visible ? visible.id.replace('ucTab-', '') : 'general';
+                            show(page.querySelector('#ucError-' + tab) ? 'ucError-' + tab : 'ucError-general', t, true);
+                            show('ucBanner', t, true);
+                        });
+                    });
+                }
+
+                function busy(promise, onError) {
+                    Dashboard.showLoadingMsg();
+                    return promise.then(function (r) { Dashboard.hideLoadingMsg(); return r; }, function (e) {
+                        Dashboard.hideLoadingMsg();
+                        return errorOf(e).then(onError);
+                    });
+                }
+
+                function fmt(text) {
+                    var args = arguments;
+                    return text.replace(/\{(\d)\}/g, function (m, i) { return args[+i + 1]; });
+                }
+
+                page.addEventListener('pageshow', function () {
+                    TABS.forEach(function (k) { show('ucError-' + k, ''); show('ucSaved-' + k, ''); });
+                    setSaveEnabled(false);
+                    loadStrings().then(function () {
+                        applyStrings();
+                        updateInvSubmitLabel();
+                        restoreTab();
+                        loadInvitations();
+                        return load();
+                    });
+                });
+
+                Array.prototype.forEach.call(page.querySelectorAll('.ucTabBtn'), function (btn) {
+                    btn.addEventListener('click', function () { selectTab(btn.getAttribute('data-tab')); });
+                });
+
+                page.querySelector('select[data-f="defaultLanguage"]').addEventListener('change', function () {
+                    syncTemplates();
+                    buildTemplates();
+                });
+
+                Array.prototype.forEach.call(page.querySelectorAll('form[data-tab-form]'), function (form) {
+                    form.addEventListener('submit', function (event) {
+                        event.preventDefault();
+                        if (!loaded) { return false; }
+                        var tab = form.getAttribute('data-tab-form');
+                        show('ucError-' + tab, '');
+                        show('ucSaved-' + tab, '');
+                        busy(api('POST', 'MailConcierge/Admin/Config', collect(tab)), function (t) { show('ucError-' + tab, t, true); }).then(function (r) {
+                            if (r) {
+                                show('ucSaved-' + tab, s.saved, false);
+                                return load(tab);
+                            }
+                        });
+                        return false;
+                    });
+                });
+
+                page.addEventListener('input', updateWarnings);
+                page.addEventListener('change', updateWarnings);
+
+                $('ucTest').addEventListener('click', function () {
+                    show('ucTestResult', '');
+                    busy(api('POST', 'MailConcierge/Admin/TestEmail', { to: $('ucTestTo').value.trim() }), function (t) { show('ucTestResult', t, true); }).then(function (r) {
+                        if (r) {
+                            show('ucTestResult', r.ok ? s.testOk : s.testFail + (r.error ? (s['err.' + r.error] || s.errGeneric) : ''), !r.ok);
+                        }
+                    });
+                });
+
+                $('ucSync').addEventListener('click', function () {
+                    busy(api('POST', 'MailConcierge/Seerr/SyncNow'), function (t) { show('ucSeerrResult', t, true); }).then(function (r) {
+                        if (r) { show('ucSeerrResult', fmt(s.synced, r.synced), false); }
+                    });
+                });
+
+                $('ucPreview').addEventListener('click', function () {
+                    show('ucSeerrResult', '');
+                    busy(api('GET', 'MailConcierge/Seerr/ImportPreview'), function (t) { show('ucSeerrResult', t, true); }).then(function (rows) {
+                        if (!rows) { return; }
+                        var body = $('ucImportRows');
+                        body.textContent = '';
+                        $('ucImportBox').hidden = !rows.length;
+                        if (!rows.length) { show('ucSeerrResult', s.previewEmpty, false); }
+                        rows.forEach(function (row) {
+                            var tr = document.createElement('tr');
+                            var cell = document.createElement('td');
+                            var box = document.createElement('input');
+                            box.type = 'checkbox';
+                            box.checked = true;
+                            box.value = row.userId;
+                            cell.appendChild(box);
+                            tr.appendChild(cell);
+                            [row.username, row.email, row.currentEmail || ''].forEach(function (text) {
+                                var td = document.createElement('td');
+                                td.textContent = text;
+                                tr.appendChild(td);
+                            });
+                            body.appendChild(tr);
+                        });
+                    });
+                });
+
+                $('ucImport').addEventListener('click', function () {
+                    var ids = Array.prototype.map.call($('ucImportRows').querySelectorAll('input:checked'), function (i) { return i.value; });
+                    busy(api('POST', 'MailConcierge/Seerr/Import', { userIds: ids }), function (t) { show('ucSeerrResult', t, true); }).then(function (r) {
+                        if (r) {
+                            show('ucSeerrResult', fmt(s.imported, r.imported), false);
+                            $('ucImportBox').hidden = true;
+                        }
+                    });
+                });
+
+                $('ucAssign').addEventListener('click', function () {
+                    busy(api('POST', 'MailConcierge/Admin/AssignProvider'), function (t) { show('ucAssignResult', t, true); }).then(function (r) {
+                        if (r) { show('ucAssignResult', fmt(s.assigned, r.assigned, r.skippedAdmins, r.skippedExternal), false); }
+                    });
+                });
+
+                // ---- Invitations tab: acts immediately, no Save button, independent of the Save logic above.
+
+                function invShowError(text) {
+                    var el = $('ucInvError');
+                    el.textContent = text || '';
+                    el.hidden = !text;
+                }
+
+                function invErrorOf(response) {
+                    var fallback = s['inv.errGeneric'];
+                    if (!response || typeof response.json !== 'function') {
+                        return Promise.resolve(fallback);
+                    }
+                    return response.json().then(function (json) {
+                        var map = { invalid_username: s['inv.errUsername'], invalid_email: s['inv.errEmail'], invalid_library: s['inv.errLibrary'], no_public_url: s['inv.errPublicUrl'] };
+                        return (json && map[json.code]) || fallback;
+                    }, function () { return fallback; });
+                }
+
+                function updateInvSubmitLabel() {
+                    $('ucInvSubmit').querySelector('span').textContent = $('ucInvEmail').value.trim() ? s['inv.send'] : s['inv.copyLink'];
+                }
+
+                function showInvLink(text, link) {
+                    $('ucInvResultText').textContent = text;
+                    $('ucInvLink').value = link;
+                    $('ucInvResult').hidden = false;
+                    $('ucInvLink').focus();
+                    $('ucInvLink').select();
+                }
+
+                function copyInvLink() {
+                    var input = $('ucInvLink');
+                    input.focus();
+                    input.select();
+                    input.setSelectionRange(0, input.value.length);
+                    var done = function () { Dashboard.alert(s['inv.copied']); };
+                    var manual = function () { Dashboard.alert(s['inv.copyManual']); };
+                    var legacy = function () {
+                        var ok = false;
+                        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+                        if (ok) { done(); } else { manual(); }
+                    };
+                    if (navigator.clipboard && window.isSecureContext) {
+                        navigator.clipboard.writeText(input.value).then(done, legacy);
+                    } else {
+                        legacy();
+                    }
+                }
+
+                function invLibraryBoxes() {
+                    return Array.prototype.slice.call($('ucInvLibraries').querySelectorAll('input[type=checkbox]'));
+                }
+
+                // The "select all" box is ticked exactly when every library is.
+                function syncInvSelectAll() {
+                    var boxes = invLibraryBoxes();
+                    $('ucInvSelectAll').checked = boxes.length > 0 && boxes.every(function (b) { return b.checked; });
+                }
+
+                function loadInvLibraries() {
+                    return api('GET', 'MailConcierge/Libraries').then(function (libraries) {
+                        var box = $('ucInvLibraries');
+                        box.textContent = '';
+                        $('ucInvSelectAllRow').style.display = libraries.length ? 'block' : 'none';
+                        $('ucInvSelectAll').checked = false;
+                        if (!libraries.length) {
+                            box.textContent = s['inv.noLibraries'];
+                            return;
+                        }
+                        libraries.forEach(function (library) {
+                            var label = document.createElement('label');
+                            label.style.display = 'block';
+                            label.style.margin = '0.4em 0';
+                            var input = document.createElement('input');
+                            input.type = 'checkbox';
+                            input.value = library.id;
+                            input.style.marginRight = '0.6em';
+                            input.addEventListener('change', syncInvSelectAll);
+                            var name = document.createElement('span');
+                            name.textContent = library.name;
+                            label.appendChild(input);
+                            label.appendChild(name);
+                            box.appendChild(label);
+                        });
+                    });
+                }
+
+                function formatInvDate(value) {
+                    try { return new Date(value).toLocaleDateString(invLang); } catch (e) { return String(value); }
+                }
+
+                function invButton(text, onClick) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.setAttribute('is', 'emby-button');
+                    b.className = 'raised emby-button';
+                    b.style.margin = '0.3em 0.5em 0.3em 0';
+                    var span = document.createElement('span');
+                    span.textContent = text;
+                    b.appendChild(span);
+                    b.addEventListener('click', onClick);
+                    return b;
+                }
+
+                function loadInvList() {
+                    return api('GET', 'MailConcierge/Invitations').then(function (items) {
+                        var list = $('ucInvList');
+                        list.textContent = '';
+                        $('ucInvEmpty').hidden = items.length > 0;
+                        items.forEach(function (inv) {
+                            var row = document.createElement('div');
+                            row.style.margin = '0.8em 0';
+                            var title = document.createElement('div');
+                            title.style.fontWeight = 'bold';
+                            title.textContent = inv.proposedUsername + (inv.email ? ' <' + inv.email + '>' : '');
+                            var info = document.createElement('div');
+                            info.className = 'fieldDescription';
+                            info.textContent = (s['inv.state.' + inv.state] || inv.state) + ' - ' + s['inv.until'] + ' ' + formatInvDate(inv.expiresAt);
+                            row.appendChild(title);
+                            row.appendChild(info);
+                            if (inv.state === 'Pending' || inv.state === 'Expired') {
+                                row.appendChild(invButton(s['inv.regenerate'], function () {
+                                    api('POST', 'MailConcierge/Invitations/' + inv.id + '/Regenerate').then(function (result) {
+                                        showInvLink(s['inv.newLink'], result.link);
+                                        return loadInvList();
+                                    }, function (e) { invErrorOf(e).then(invShowError); });
+                                }));
+                                row.appendChild(invButton(s['inv.revoke'], function () {
+                                    if (!window.confirm(s['inv.confirmRevoke'])) { return; }
+                                    api('DELETE', 'MailConcierge/Invitations/' + inv.id).then(function () { $('ucInvResult').hidden = true; return loadInvList(); }, function (e) { invErrorOf(e).then(invShowError); });
+                                }));
+                            }
+                            list.appendChild(row);
+                        });
+                    });
+                }
+
+                function loadInvitations() {
+                    invShowError('');
+                    // A link is shown only once, right after it is created: leaving and coming back hides it.
+                    $('ucInvResult').hidden = true;
+                    return Promise.all([loadInvLibraries(), loadInvList()]).then(null, function () { invShowError(s['inv.errGeneric']); });
+                }
+
+                $('ucInvEmail').addEventListener('input', updateInvSubmitLabel);
+                $('ucInvCopy').addEventListener('click', copyInvLink);
+                $('ucInvSelectAll').addEventListener('change', function () {
+                    var on = $('ucInvSelectAll').checked;
+                    invLibraryBoxes().forEach(function (b) { b.checked = on; });
+                });
+
+                $('ucInvForm').addEventListener('submit', function (event) {
+                    event.preventDefault();
+                    invShowError('');
+                    $('ucInvResult').hidden = true;
+                    var email = $('ucInvEmail').value.trim();
+                    var days = parseInt($('ucInvDays').value, 10);
+                    var libraryIds = Array.prototype.map.call($('ucInvLibraries').querySelectorAll('input:checked'), function (i) { return i.value; });
+                    if (!libraryIds.length && !window.confirm(s['inv.confirmNoLibrary'])) { return false; }
+                    Dashboard.showLoadingMsg();
+                    api('POST', 'MailConcierge/Invitations', {
+                        proposedUsername: $('ucInvUsername').value.trim(),
+                        email: email || null,
+                        libraryIds: libraryIds,
+                        days: isNaN(days) ? null : days,
+                        language: $('ucInvLanguage').value
+                    }).then(function (result) {
+                        Dashboard.hideLoadingMsg();
+                        if (email) {
+                            showInvLink(result.emailed ? s['inv.sentTo'].replace('{0}', email) : (result.emailStatus === 'limit_reached' ? s['inv.notSentLimit'] : s['inv.notSent']), result.link);
+                        } else {
+                            showInvLink(s['inv.linkReady'], result.link);
+                            copyInvLink();
+                        }
+                        $('ucInvUsername').value = '';
+                        $('ucInvEmail').value = '';
+                        updateInvSubmitLabel();
+                        return loadInvList();
+                    }, function (response) {
+                        Dashboard.hideLoadingMsg();
+                        return invErrorOf(response).then(invShowError);
+                    });
+                    return false;
+                });
+            }());
+        </script>
+    </div>
+</body>
+</html>

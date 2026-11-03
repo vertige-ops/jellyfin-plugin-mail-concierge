@@ -1,0 +1,12 @@
+Subject: You are invited to {{serverName}}
+
+Hello,
+
+You have been invited to join {{serverName}}, to watch movies and shows.
+
+To create your account, open this link:
+{{link}}
+
+You will choose your user name and your password there. This link is valid until {{expires}}.
+
+If you don't know {{serverName}}, you can ignore this message.

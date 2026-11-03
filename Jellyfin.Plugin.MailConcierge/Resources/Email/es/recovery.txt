@@ -1,0 +1,16 @@
+Subject: Cambie su contraseña en {{serverName}}
+
+Hola {{username}}:
+
+Ha solicitado cambiar su contraseña en {{serverName}}.
+
+Su código PIN: {{pin}}
+
+Si ha dejado abierta la página «¿Olvidó su contraseña?», escriba este código en la pantalla.
+
+Si no, abra simplemente este enlace para elegir una nueva contraseña:
+{{link}}
+
+El código y el enlace son válidos hasta las {{expires}} y solo funcionan una vez. No se los comunique a nadie.
+
+Si usted no ha hecho esta solicitud, puede ignorar este mensaje: no se modificará nada.

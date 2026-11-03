@@ -1,0 +1,21 @@
+name: '🏗️ Build Plugin'
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: jellyfin/jellyfin-meta-plugins/.github/workflows/build.yaml@5f6990aa467ae0a6b62c91ad0502e3e1a53117ce # master as of 2026-11-01

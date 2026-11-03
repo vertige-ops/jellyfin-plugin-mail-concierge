@@ -1,0 +1,16 @@
+Subject: Change your password on {{serverName}}
+
+Hello {{username}},
+
+You asked to change your password on {{serverName}}.
+
+Your PIN code: {{pin}}
+
+If you kept the “Forgot password” page open, enter this code on the screen.
+
+Otherwise, simply open this link to choose a new password:
+{{link}}
+
+The code and the link are valid until {{expires}} and work only once. Do not share them with anyone.
+
+If this wasn't you, you can ignore this message: nothing will be changed.
