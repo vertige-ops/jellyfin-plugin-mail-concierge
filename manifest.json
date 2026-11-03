@@ -1,11 +1,21 @@
 [
-  {
-    "guid": "4643600e-9108-4342-8cdd-1ebb049bc033",
-    "name": "Mail Concierge",
-    "description": "Mail Concierge lets administrators invite people by e-mail and lets users recover their password by e-mail, without any change to Jellyfin itself.",
-    "overview": "E-mail invitations and e-mail password recovery for Jellyfin",
-    "owner": "vertige-ops",
-    "category": "General",
-    "versions": []
-  }
+    {
+        "guid": "4643600e-9108-4342-8cdd-1ebb049bc033",
+        "name": "Mail Concierge",
+        "description": "Mail Concierge lets administrators invite people by e-mail and lets users recover their password by e-mail, without any change to Jellyfin itself. E-mail is the only channel.\n",
+        "overview": "E-mail invitations and e-mail password recovery for Jellyfin",
+        "owner": "vertige-ops",
+        "category": "General",
+        "imageUrl": "https://raw.githubusercontent.com/vertige-ops/jellyfin-plugin-mail-concierge/main/assets/brand/catalog-thumb.svg",
+        "versions": [
+            {
+                "version": "12.0.0.0",
+                "changelog": "First public release: e-mail invitations, e-mail password recovery, e-mail address in the profile, optional Seerr synchronisation, English, French, Spanish and German.\n",
+                "targetAbi": "12.1.0.0",
+                "sourceUrl": "https://github.com/vertige-ops/jellyfin-plugin-mail-concierge/releases/download/v12.0.0.0/Jellyfin.Plugin.MailConcierge_12.1.0.zip",
+                "checksum": "3a439e197ee9e6d4d1f59a13645b624b",
+                "timestamp": "2026-11-03T18:39:57Z"
+            }
+        ]
+    }
 ]
