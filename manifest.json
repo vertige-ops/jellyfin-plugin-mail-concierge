@@ -9,6 +9,14 @@
         "imageUrl": "https://raw.githubusercontent.com/vertige-ops/jellyfin-plugin-mail-concierge/main/assets/brand/catalog-thumb.svg",
         "versions": [
             {
+                "version": "12.4.0.0",
+                "changelog": "Sign in with your confirmed e-mail address (off by default), and a series of security and reliability fixes; this release needs Jellyfin 12.4. Jellyfin 12.1 to 12.3 stay on 12.0.0.0.\n",
+                "targetAbi": "12.4.0.0",
+                "sourceUrl": "https://github.com/vertige-ops/jellyfin-plugin-mail-concierge/releases/download/v12.4.0.0/Jellyfin.Plugin.MailConcierge_12.4.0.zip",
+                "checksum": "b22a17ca155b281fda0ceafe242bdc99",
+                "timestamp": "2026-11-13T17:39:13Z"
+            },
+            {
                 "version": "12.0.0.0",
                 "changelog": "First public release: e-mail invitations, e-mail password recovery, e-mail address in the profile, optional Seerr synchronisation, English, French, Spanish and German.\n",
                 "targetAbi": "12.1.0.0",
