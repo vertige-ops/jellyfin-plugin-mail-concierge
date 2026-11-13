@@ -16,6 +16,7 @@ using Jellyfin.Plugin.MailConcierge.Data;
 using Jellyfin.Plugin.MailConcierge.Email;
 using Jellyfin.Plugin.MailConcierge.Security;
 using Jellyfin.Plugin.MailConcierge.Seerr;
+using Jellyfin.Plugin.MailConcierge.Tests.Security;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Devices;
 using MediaBrowser.Controller.Library;
@@ -55,6 +56,8 @@ public sealed class EmailServiceTests : IDisposable
     private readonly TokenService _tokens;
     private readonly EmailQueue _queue;
     private readonly EmailService _service;
+    private readonly ProxyGuard _guard = Guards.Quiet();
+    private readonly ServiceGate _gate;
     private readonly User _bob = new("bob", AccountPolicy.DefaultAuthProviderId, "reset") { Id = Guid.NewGuid() };
 
     public EmailServiceTests()
@@ -67,7 +70,8 @@ public sealed class EmailServiceTests : IDisposable
         _queue.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         var host = new Mock<IServerApplicationHost>();
         host.SetupGet(h => h.FriendlyName).Returns("My Jellyfin");
-        _service = new EmailService(_store, _tokens, limiter, _queue, _users.Object, new SessionCloser(_devices.Object, _sessions.Object, _time, NullLogger<SessionCloser>.Instance), _seerr.Object, host.Object, () => _config, _time, NullLogger<EmailService>.Instance);
+        _gate = new ServiceGate(() => _config, _guard);
+        _service = new EmailService(_store, _tokens, limiter, _queue, _users.Object, new SessionCloser(_devices.Object, _sessions.Object, _time, NullLogger<SessionCloser>.Instance), _seerr.Object, host.Object, () => _config, _gate, _time, NullLogger<EmailService>.Instance);
         _users.Setup(u => u.GetUserById(_bob.Id)).Returns(_bob);
         _users.Setup(u => u.AuthenticateUser("bob", "right", Remote, false)).ReturnsAsync(_bob);
         _users.Setup(u => u.AuthenticateUser("bob", "wrong", Remote, false)).ReturnsAsync((User?)null);
@@ -181,6 +185,129 @@ public sealed class EmailServiceTests : IDisposable
 
         _users.Verify(u => u.AuthenticateUser("bob", "wrong", Remote, false), Times.Exactly(2));
         Assert.Equal(2, results.Count(r => r == ChangeResult.WrongPassword));
+    }
+
+    [Fact]
+    public async Task BothForms_OneFailureFromTheLockout_AreRefused_WithoutReachingJellyfin()
+    {
+        var cancel = await ConfirmedChangeAsync();
+        _users.Invocations.Clear();
+        _bob.LoginAttemptsBeforeLockout = 3;
+        _bob.InvalidLoginAttemptCount = 2;
+
+        Assert.Equal(ChangeResult.PasswordLocked, await _service.RequestChangeAsync(_bob.Id, "x@example.org", "wrong", Remote));
+        Assert.Equal(ChangeResult.PasswordLocked, await _service.RequestChangeAsync(_bob.Id, "x@example.org", "right", Remote));
+        Assert.Equal(CancelResult.Locked, await _service.CancelChangeAsync(cancel, "wrong", Remote, Remote));
+        Assert.Equal(CancelResult.Locked, await _service.CancelChangeAsync(cancel, "right", Remote, Remote));
+
+        _users.Verify(u => u.AuthenticateUser(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()), Times.Never);
+        Assert.Equal(2, _bob.InvalidLoginAttemptCount);
+        Assert.Equal("new@example.org", (await _service.GetAsync(_bob.Id))!.Email);
+
+        // The refusals did not use the hourly budget: once the counter is back to 0, two wrong passwords still reach Jellyfin.
+        _bob.InvalidLoginAttemptCount = 0;
+        Assert.Equal(ChangeResult.WrongPassword, await _service.RequestChangeAsync(_bob.Id, "x@example.org", "wrong", Remote));
+        Assert.Equal(CancelResult.WrongPassword, await _service.CancelChangeAsync(cancel, "wrong", Remote, Remote));
+        _users.Verify(u => u.AuthenticateUser("bob", "wrong", Remote, false), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task ThresholdThree_OneFailureAlready_OneCheck_ThenRefused()
+    {
+        CountWrongPasswords();
+        _bob.LoginAttemptsBeforeLockout = 3;
+        _bob.InvalidLoginAttemptCount = 1;
+
+        Assert.Equal(ChangeResult.WrongPassword, await _service.RequestChangeAsync(_bob.Id, "n@example.org", "wrong", Remote));
+        Assert.Equal(2, _bob.InvalidLoginAttemptCount);
+
+        // Within the hourly limit, but one more failure would disable the account.
+        Assert.Equal(ChangeResult.PasswordLocked, await _service.RequestChangeAsync(_bob.Id, "n@example.org", "wrong", Remote));
+        _users.Verify(u => u.AuthenticateUser("bob", "wrong", Remote, false), Times.Once);
+        Assert.Equal(2, _bob.InvalidLoginAttemptCount);
+        Assert.False(_bob.HasPermission(Jellyfin.Database.Implementations.Enums.PermissionKind.IsDisabled));
+    }
+
+    [Fact]
+    public async Task ThresholdThree_Cancel_OneFailureAlready_OneCheck_ThenRefused()
+    {
+        var cancel = await ConfirmedChangeAsync();
+        CountWrongPasswords();
+        _bob.LoginAttemptsBeforeLockout = 3;
+        _bob.InvalidLoginAttemptCount = 1;
+
+        Assert.Equal(CancelResult.WrongPassword, await _service.CancelChangeAsync(cancel, "wrong", Remote, Remote));
+        Assert.Equal(CancelResult.Locked, await _service.CancelChangeAsync(cancel, "wrong", Remote, Remote));
+        _users.Verify(u => u.AuthenticateUser("bob", "wrong", Remote, false), Times.Once);
+        Assert.Equal(2, _bob.InvalidLoginAttemptCount);
+    }
+
+    [Fact]
+    public async Task NoThreshold_OnlyTheHourlyLimitApplies()
+    {
+        CountWrongPasswords();
+        _bob.LoginAttemptsBeforeLockout = null;
+        _bob.InvalidLoginAttemptCount = 10;
+
+        Assert.Equal(ChangeResult.WrongPassword, await _service.RequestChangeAsync(_bob.Id, "n@example.org", "wrong", Remote));
+        Assert.Equal(ChangeResult.WrongPassword, await _service.RequestChangeAsync(_bob.Id, "n@example.org", "wrong", Remote));
+        Assert.Equal(ChangeResult.PasswordLocked, await _service.RequestChangeAsync(_bob.Id, "n@example.org", "wrong", Remote));
+        _users.Verify(u => u.AuthenticateUser("bob", "wrong", Remote, false), Times.Exactly(2));
+        Assert.Equal(12, _bob.InvalidLoginAttemptCount);
+    }
+
+    [Fact]
+    public async Task ThresholdFive_InvitedAccount_CountThree_OneCheck_CountFour_Refused()
+    {
+        CountWrongPasswords();
+        _bob.LoginAttemptsBeforeLockout = 5;
+        _bob.InvalidLoginAttemptCount = 3;
+
+        Assert.Equal(ChangeResult.WrongPassword, await _service.RequestChangeAsync(_bob.Id, "n@example.org", "wrong", Remote));
+        Assert.Equal(4, _bob.InvalidLoginAttemptCount);
+        Assert.Equal(ChangeResult.PasswordLocked, await _service.RequestChangeAsync(_bob.Id, "n@example.org", "right", Remote));
+
+        _users.Verify(u => u.AuthenticateUser("bob", "wrong", Remote, false), Times.Once);
+        _users.Verify(u => u.AuthenticateUser("bob", "right", Remote, false), Times.Never);
+    }
+
+    [Fact]
+    public async Task PasswordCheck_WaitsForTheAccountHeldBySignInByAddress()
+    {
+        var resolver = new EmailLoginResolver(_users.Object, _service, () => _config);
+        var held = await resolver.LockAccountAsync(_bob.Id, TestContext.Current.CancellationToken);
+
+        var change = _service.RequestChangeAsync(_bob.Id, "n@example.org", "right", Remote);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        Assert.False(change.IsCompleted);
+        _users.Verify(u => u.AuthenticateUser(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()), Times.Never);
+
+        held.Dispose();
+        Assert.Equal(ChangeResult.Ok, await change.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        _users.Verify(u => u.AuthenticateUser("bob", "right", Remote, false), Times.Once);
+    }
+
+    [Fact]
+    public async Task SignInByAddress_WaitsForTheAccountHeldByAPasswordCheck()
+    {
+        var resolver = new EmailLoginResolver(_users.Object, _service, () => _config);
+        var native = new TaskCompletionSource<User?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _users.Setup(u => u.AuthenticateUser("bob", "slow", Remote, false)).Returns(() =>
+        {
+            reached.TrySetResult();
+            return native.Task;
+        });
+
+        var change = _service.RequestChangeAsync(_bob.Id, "n@example.org", "slow", Remote);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var signIn = resolver.LockAccountAsync(_bob.Id, TestContext.Current.CancellationToken);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        Assert.False(signIn.IsCompleted);
+
+        native.SetResult(null);
+        Assert.Equal(ChangeResult.WrongPassword, await change.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        (await signIn.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Dispose();
     }
 
     [Fact]
@@ -311,6 +438,12 @@ public sealed class EmailServiceTests : IDisposable
         Assert.Equal(CancelResult.Invalid, await _service.CancelChangeAsync(cancel, "right", Remote, Remote));
         _seerr.Verify(s => s.PushAsync(_bob.Id), Times.Exactly(2));
     }
+
+    /// <summary>Makes a wrong password count as Jellyfin does: one more failure on the account.</summary>
+    private void CountWrongPasswords()
+        => _users.Setup(u => u.AuthenticateUser("bob", "wrong", Remote, false))
+            .Callback(() => _bob.InvalidLoginAttemptCount++)
+            .ReturnsAsync((User?)null);
 
     private async Task<string> ConfirmedChangeAsync(string oldAddress = "old@example.org")
     {
@@ -516,7 +649,132 @@ public sealed class EmailServiceTests : IDisposable
         Assert.Equal(other, Assert.Single(await _store.ReadAsync(d => d.Tokens.ToList())).UserId);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Closed_RequestChange_ReturnsClosed_WithoutCheckingThePassword(bool guardTripped)
+    {
+        await Seed("old@example.org");
+        Close(guardTripped);
+
+        Assert.Equal(ChangeResult.Closed, await _service.RequestChangeAsync(_bob.Id, "new@example.org", "right", Remote));
+
+        _users.Verify(u => u.AuthenticateUser(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()), Times.Never);
+        Assert.Null((await _service.GetAsync(_bob.Id))!.PendingEmail);
+        Assert.Empty(await _store.ReadAsync(d => d.Tokens.ToList()));
+        await _transport.ExpectNoneAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Closed_Confirm_ReturnsFalse_AndKeepsTheToken(bool guardTripped)
+    {
+        await Seed("old@example.org");
+        await _service.RequestChangeAsync(_bob.Id, "new@example.org", "right", Remote);
+        var confirm = LinkOf((await _transport.WaitForAsync(1))[0]);
+        Close(guardTripped);
+
+        Assert.Null(await _service.PeekLanguageAsync(confirm, TokenPurpose.ConfirmEmail));
+        Assert.False(await _service.ConfirmAsync(confirm, Remote));
+
+        var record = (await _service.GetAsync(_bob.Id))!;
+        Assert.Equal("old@example.org", record.Email);
+        Assert.Equal("new@example.org", record.PendingEmail);
+        Assert.True(await _store.ReadAsync(d => d.Tokens.Any(t => t.Purpose == TokenPurpose.ConfirmEmail && _tokens.Matches(confirm, t.Hash))));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Closed_Cancel_ReturnsInvalid(bool guardTripped)
+    {
+        var cancel = await ConfirmedChangeAsync();
+        Close(guardTripped);
+
+        Assert.Null(await _service.PeekLanguageAsync(cancel, TokenPurpose.CancelEmailChange));
+        Assert.Equal(CancelResult.Invalid, await _service.CancelChangeAsync(cancel, "right", Remote, Remote));
+
+        _users.Verify(u => u.AuthenticateUser(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()), Times.Exactly(1));
+        Assert.Equal("new@example.org", (await _service.GetAsync(_bob.Id))!.Email);
+        Assert.True(await _store.ReadAsync(d => d.Tokens.Any(t => t.Purpose == TokenPurpose.CancelEmailChange && _tokens.Matches(cancel, t.Hash))));
+    }
+
+    private void Close(bool guardTripped)
+    {
+        if (guardTripped)
+        {
+            Guards.Trip(_guard);
+        }
+        else
+        {
+            _config.Enabled = false;
+        }
+
+        Assert.False(_gate.IsOpen);
+    }
+
     private static string LinkOf(EmailMessage m) => Regex.Match(m.Text, @"[?]t=([\w-]+)").Groups[1].Value;
+
+    [Theory]
+    [InlineData(EnqueueResult.LimitReached, ChangeResult.RateLimited)]
+    [InlineData(EnqueueResult.QueueFull, ChangeResult.Unavailable)]
+    public async Task RequestChange_ConfirmationNotQueued_RestoresThePreviousState(EnqueueResult refusal, ChangeResult expected)
+    {
+        await Seed("old@example.org");
+        var previousToken = new TokenRecord(_tokens.Hash(_tokens.NewToken()), TokenPurpose.ConfirmEmail, _bob.Id, null, "first@example.org", _time.GetUtcNow().UtcDateTime.AddHours(5), 0);
+        await _store.WriteAsync(d =>
+        {
+            d.Emails[0] = d.Emails[0] with { PendingEmail = "first@example.org" };
+            d.Tokens.Add(previousToken);
+        });
+        var emailsBefore = await _store.ReadAsync(d => d.Emails.ToList());
+        var tokensBefore = await _store.ReadAsync(d => d.Tokens.ToList());
+        var (service, queue) = ServiceWithRefusingQueue(refusal);
+
+        var result = await service.RequestChangeAsync(_bob.Id, "new@example.org", "right", Remote);
+
+        Assert.Equal(expected, result);
+        Assert.Equal(emailsBefore, await _store.ReadAsync(d => d.Emails.ToList()));
+        Assert.Equal(tokensBefore, await _store.ReadAsync(d => d.Tokens.ToList()));
+        queue.Dispose();
+    }
+
+    [Fact]
+    public async Task RequestChange_ConfirmationNotQueued_ForAUserWithoutRecord_LeavesNoRecord()
+    {
+        var (service, queue) = ServiceWithRefusingQueue(EnqueueResult.LimitReached);
+
+        Assert.Equal(ChangeResult.RateLimited, await service.RequestChangeAsync(_bob.Id, "new@example.org", "right", Remote));
+
+        Assert.Empty(await _store.ReadAsync(d => d.Emails.ToList()));
+        Assert.Empty(await _store.ReadAsync(d => d.Tokens.ToList()));
+        queue.Dispose();
+    }
+
+    private (EmailService Service, EmailQueue Queue) ServiceWithRefusingQueue(EnqueueResult refusal)
+    {
+        // The queue is never started: a full one holds its messages, and a budget of zero refuses the first.
+        var config = new PluginConfiguration
+        {
+            PublicUrl = _config.PublicUrl,
+            SmtpHost = _config.SmtpHost,
+            FromAddress = _config.FromAddress,
+            ConfirmationHours = 48,
+            MaxAccountEmailsPerHour = refusal == EnqueueResult.LimitReached ? 0 : 100,
+        };
+        var limiter = new RateLimiter(_time);
+        var queue = new EmailQueue(() => config, _transport, limiter, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero }, capacity: 1);
+        if (refusal == EnqueueResult.QueueFull)
+        {
+            Assert.Equal(EnqueueResult.Queued, queue.Enqueue(new EmailMessage("filler@example.org", "s", "h", "t", "confirm-email", null)));
+        }
+
+        var host = new Mock<IServerApplicationHost>();
+        host.SetupGet(h => h.FriendlyName).Returns("My Jellyfin");
+        var service = new EmailService(_store, _tokens, limiter, queue, _users.Object, new SessionCloser(_devices.Object, _sessions.Object, _time, NullLogger<SessionCloser>.Instance), _seerr.Object, host.Object, () => config, _gate, _time, NullLogger<EmailService>.Instance);
+        return (service, queue);
+    }
 
     private Task Seed(string email, string language = "en")
         => _store.WriteAsync(d => d.Emails.Add(new UserEmail(_bob.Id, email, null, language, _time.GetUtcNow().UtcDateTime)));

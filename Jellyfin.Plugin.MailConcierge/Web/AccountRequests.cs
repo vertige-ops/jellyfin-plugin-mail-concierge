@@ -18,5 +18,5 @@ public sealed record AdminEmailRequest(string? Email);
 /// <summary>
 /// The body of <c>POST /MailConcierge/Seerr/Import</c>.
 /// </summary>
-/// <param name="UserIds">The Jellyfin ids of the users whose Seerr address is imported.</param>
-public sealed record SeerrImportRequest(System.Collections.Generic.IReadOnlyList<System.Guid>? UserIds);
+/// <param name="Items">The (user id, address) pairs seen in the preview and chosen for import.</param>
+public sealed record SeerrImportRequest(System.Collections.Generic.IReadOnlyList<Jellyfin.Plugin.MailConcierge.Seerr.SeerrImportItem>? Items);

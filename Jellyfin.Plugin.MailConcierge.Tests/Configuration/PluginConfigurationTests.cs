@@ -14,6 +14,7 @@ public class PluginConfigurationTests
 
         Assert.True(c.Enabled);
         Assert.False(c.NativeForgotPassword);
+        Assert.False(c.EmailLogin);
         Assert.Equal(string.Empty, c.PublicUrl);
         Assert.Equal("en", c.DefaultLanguage);
 
@@ -50,6 +51,10 @@ public class PluginConfigurationTests
     }
 
     [Fact]
+    public void EmailLogin_DefaultsToFalse()
+        => Assert.False(new PluginConfiguration().EmailLogin);
+
+    [Fact]
     public void CanSendEmail_FalseWhenPublicUrlEmpty()
     {
         var c = new PluginConfiguration { SmtpHost = "smtp.example.org", FromAddress = "jf@example.org" };
@@ -75,6 +80,7 @@ public class PluginConfigurationTests
             SmtpPort = 465,
             SmtpSecurity = SmtpSecurity.SslOnConnect,
             SessionsOnReset = SessionClosePolicy.InactiveSinceDays,
+            EmailLogin = true,
         };
         c.TemplateOverrides["fr/invite.html"] = "<p>Bonjour</p>";
         c.TemplateOverrides["en/reset.txt"] = "Hello";
@@ -89,6 +95,7 @@ public class PluginConfigurationTests
         Assert.Equal(465, back.SmtpPort);
         Assert.Equal(SmtpSecurity.SslOnConnect, back.SmtpSecurity);
         Assert.Equal(SessionClosePolicy.InactiveSinceDays, back.SessionsOnReset);
+        Assert.True(back.EmailLogin);
         Assert.Equal(2, back.TemplateOverrides.Count);
         Assert.Equal("<p>Bonjour</p>", back.TemplateOverrides["fr/invite.html"]);
         Assert.Equal("Hello", back.TemplateOverrides["en/reset.txt"]);

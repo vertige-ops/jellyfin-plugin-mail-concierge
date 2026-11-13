@@ -20,6 +20,8 @@
   "profile.error.rateLimited": "Too many attempts. Please try again later.",
   "profile.error.passwordLocked": "Too many wrong passwords. For the safety of your account, the password is not checked again for an hour. If your account gets locked, ask the administrator to unlock it.",
   "profile.error.unavailable": "E-mail is not set up on this server. Please contact the administrator.",
-  "forgot.next": "On the next page, type your user name and the code you received.",
-  "pin.username": "User name"
+  "profile.error.closed": "Mail Concierge is currently unavailable on this server. Contact the administrator.",
+  "forgot.next": "On the next page, type your user name or e-mail address and the code you received.",
+  "pin.username": "User name or e-mail address",
+  "login.usernameOrEmail": "User name or e-mail"
 }

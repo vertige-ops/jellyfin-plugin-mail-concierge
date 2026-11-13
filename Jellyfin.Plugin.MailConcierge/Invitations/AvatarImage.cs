@@ -155,6 +155,7 @@ public static class AvatarImage
     private static (int, int)? ReadJpeg(ReadOnlySpan<byte> d)
     {
         var pos = 2;
+        (int, int)? frame = null;
         while (pos + 1 < d.Length)
         {
             if (d[pos] != 0xFF)
@@ -179,9 +180,9 @@ public static class AvatarImage
                 continue;
             }
 
-            if (marker is 0xD9 or 0xDA or 0x00 or 0xD8)
+            if (marker is 0xD9 or 0x00 or 0xD8)
             {
-                // End of image or start of the scan before any frame header: malformed.
+                // End of image before the scan, or a stray marker: malformed.
                 return null;
             }
 
@@ -191,22 +192,35 @@ public static class AvatarImage
             }
 
             var length = (d[pos] << 8) | d[pos + 1];
-            if (length < 2)
+            if (length < 2 || pos + length > d.Length)
             {
                 return null;
+            }
+
+            if (marker == 0xDA)
+            {
+                // Start of the scan: the headers are over, exactly one frame header must have been met.
+                return frame;
             }
 
             // SOF0..SOF15, except DHT (C4), JPG (C8) and DAC (CC).
             if (marker is >= 0xC0 and <= 0xCF && marker is not (0xC4 or 0xC8 or 0xCC))
             {
-                if (length < 8 || pos + 7 > d.Length)
+                if (frame is not null || length < 8)
                 {
                     return null;
                 }
 
+                // Bounds: length >= 8 and pos + length <= d.Length, so pos + 7 (Nf) is inside the segment.
                 var height = (d[pos + 3] << 8) | d[pos + 4];
                 var width = (d[pos + 5] << 8) | d[pos + 6];
-                return (width, height);
+                var components = d[pos + 7];
+                if (width == 0 || height == 0 || components is < 1 or > 4 || length != 8 + (3 * components))
+                {
+                    return null;
+                }
+
+                frame = (width, height);
             }
 
             pos += length;

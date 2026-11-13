@@ -38,6 +38,9 @@ public sealed class AdminConfigRequest
     /// <summary>Gets or sets the SMTP password; empty keeps the stored one.</summary>
     public string? SmtpPassword { get; set; }
 
+    /// <summary>Gets or sets a value indicating whether to empty the stored SMTP password; a non-empty <see cref="SmtpPassword"/> in the same request wins.</summary>
+    public bool? ClearSmtpPassword { get; set; }
+
     /// <summary>Gets or sets the sender address.</summary>
     public string? FromAddress { get; set; }
 
@@ -76,6 +79,9 @@ public sealed class AdminConfigRequest
 
     /// <summary>Gets or sets a value indicating whether administrators are handled.</summary>
     public bool? AllowAdministrators { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether users may sign in with their confirmed e-mail address; null keeps the stored value.</summary>
+    public bool? EmailLogin { get; set; }
 
     /// <summary>Gets or sets the sessions policy (None, All, InactiveSinceDays).</summary>
     public string? SessionsOnReset { get; set; }

@@ -152,10 +152,12 @@ public sealed class RateLimiter
             Sweep(now, force: true);
             if (_entries.Count >= _maxEntries)
             {
-                // Still full of live entries: evict the oldest tenth (unblocked first), so the cost is amortised.
+                // Still full of live entries: evict a tenth, so the cost is amortised. Entries keyed by client address go first, so
+                // that a flood of distinct addresses cannot reset the server-wide and per-account budgets; then unblocked, then oldest.
                 var batch = Math.Max(1, _maxEntries / 10);
                 var victims = _entries
-                    .OrderBy(kv => kv.Value.BlockedUntil > now)
+                    .OrderBy(kv => !RateLimitBuckets.IsPerClientAddress(kv.Key.Bucket))
+                    .ThenBy(kv => kv.Value.BlockedUntil > now)
                     .ThenBy(kv => kv.Value.Order)
                     .Take(batch)
                     .Select(kv => kv.Key)

@@ -34,7 +34,7 @@ public class HelpTooltipsTests
         var keys = HelpKeys();
         string[] expected =
         {
-            "help.publicUrl", "help.defaultLanguage", "help.allowAdministrators", "help.sessionsOnReset", "help.sessionDays",
+            "help.publicUrl", "help.defaultLanguage", "help.allowAdministrators", "help.emailLogin", "help.sessionsOnReset", "help.sessionDays",
             "help.smtpSecurity", "help.fromAddress", "help.invitationDays", "help.pinMinutes", "help.confirmationHours",
             "help.cancelHours", "help.maxRecoveryHour", "help.maxInvitationHour", "help.maxAccountHour", "help.maxAccount", "help.maxIp", "help.maxPin", "help.templates",
             "help.seerrUrl", "help.seerrApiKey", "help.assignProvider",

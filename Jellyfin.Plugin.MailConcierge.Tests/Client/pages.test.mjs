@@ -34,3 +34,9 @@ test('after a success the form title is hidden, the success stays, the tab is re
     await new Promise((r) => setTimeout(r, 300));
     assert.equal(w.location.href, 'http://jf.test/MailConcierge/Cancel?t=abc');
 });
+
+test('the user name input of the invitation page is limited to 64 UTF-16 code units', () => {
+    const accept = readFileSync(here('../../Jellyfin.Plugin.MailConcierge/Resources/Pages/accept.html'), 'utf8');
+    const dom = new JSDOM(`<!DOCTYPE html><body>${accept}</body>`);
+    assert.equal(dom.window.document.getElementById('username').getAttribute('maxlength'), '64');
+});

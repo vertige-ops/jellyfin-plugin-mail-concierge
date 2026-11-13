@@ -33,14 +33,20 @@ public enum ChangeResult
     /// <summary>The address is not valid, or is the current address.</summary>
     InvalidEmail,
 
-    /// <summary>Too many change requests for this user.</summary>
+    /// <summary>Too many change requests for this user, or the hourly budget of account e-mails is used up: nothing was kept.</summary>
     RateLimited,
 
-    /// <summary>E-mail sending is not configured, so a confirmation cannot be sent.</summary>
+    /// <summary>E-mail sending is not configured, or the sending queue is full, so a confirmation cannot be sent: nothing was kept.</summary>
     Unavailable,
 
-    /// <summary>Too many wrong passwords for this user lately: the password is not checked until the hour is over.</summary>
-    PasswordLocked
+    /// <summary>
+    /// Too many wrong passwords for this user lately, or one more would reach the lockout threshold of Jellyfin: the password is
+    /// not checked.
+    /// </summary>
+    PasswordLocked,
+
+    /// <summary>Mail Concierge is disabled or blocked by the proxy guard: nothing was checked, stored or sent.</summary>
+    Closed
 }
 
 /// <summary>The outcome of the cancellation of an e-mail change.</summary>
@@ -55,7 +61,10 @@ public enum CancelResult
     /// <summary>The password is wrong.</summary>
     WrongPassword,
 
-    /// <summary>Too many wrong passwords lately for this user: the password is not checked.</summary>
+    /// <summary>
+    /// Too many wrong passwords lately for this user, or one more would reach the lockout threshold of Jellyfin: the password is
+    /// not checked.
+    /// </summary>
     Locked
 }
 
@@ -68,7 +77,7 @@ internal enum PasswordCheck
     /// <summary>The password is wrong.</summary>
     Wrong,
 
-    /// <summary>Too many wrong passwords: Jellyfin was not asked.</summary>
+    /// <summary>Too many wrong passwords this hour, or one more would reach the lockout threshold: Jellyfin was not asked.</summary>
     Locked,
 }
 
@@ -90,8 +99,9 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
     public const int MaxChangeRequestsPerHour = 5;
 
     /// <summary>
-    /// The wrong passwords a user can type per hour in Mail Concierge forms. Kept below the lockout threshold of Jellyfin, so a stolen
-    /// session token cannot be used to lock the account by guessing here.
+    /// The wrong passwords a user can type per hour in Mail Concierge forms. It bounds guessing; it does not by itself keep the account
+    /// below the lockout threshold of Jellyfin, whose failure counter never decays: that is done by refusing any check that could
+    /// reach the threshold (<see cref="AccountPolicy.NextFailureLocksOut"/>).
     /// </summary>
     public const int MaxPasswordFailuresPerHour = 2;
 
@@ -103,7 +113,7 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
     private static readonly TimeSpan FailWindow = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan FailBlock = TimeSpan.FromMinutes(15);
 
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, SemaphoreSlim> _passwordGates = new();
+    private readonly KeyedLock<Guid> _accountLocks = new();
     private readonly MailConciergeStore _store;
     private readonly TokenService _tokens;
     private readonly RateLimiter _limiter;
@@ -113,6 +123,7 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
     private readonly ISeerrSync _seerr;
     private readonly IServerApplicationHost _host;
     private readonly Func<PluginConfiguration> _config;
+    private readonly ServiceGate _gate;
     private readonly TimeProvider _time;
     private readonly ILogger<EmailService> _logger;
 
@@ -128,6 +139,7 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
     /// <param name="seerr">The Seerr synchronisation.</param>
     /// <param name="host">The application host (server name).</param>
     /// <param name="config">Accessor of the current configuration.</param>
+    /// <param name="gate">Tells whether the service is open (enabled, proxy guard quiet).</param>
     /// <param name="time">The time source.</param>
     /// <param name="logger">The logger.</param>
     public EmailService(
@@ -140,6 +152,7 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
         ISeerrSync seerr,
         IServerApplicationHost host,
         Func<PluginConfiguration> config,
+        ServiceGate gate,
         TimeProvider time,
         ILogger<EmailService> logger)
     {
@@ -152,6 +165,7 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
         _seerr = seerr;
         _host = host;
         _config = config;
+        _gate = gate;
         _time = time;
         _logger = logger;
     }
@@ -185,6 +199,18 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
     private static partial Regex PlainAddress();
 
     /// <summary>
+    /// Holds one account: taken by the password checks of the Mail Concierge forms and by sign-in with the e-mail address
+    /// (<see cref="EmailLoginResolver.LockAccountAsync"/>), so that a check always reads the failure counter left by the previous
+    /// one. Other accounts never wait.
+    /// </summary>
+    /// <param name="userId">The account id.</param>
+    /// <param name="cancellationToken">Ends the wait for the account; the account is then not taken.</param>
+    /// <returns>A handle that releases the account when disposed.</returns>
+    /// <exception cref="OperationCanceledException">The wait was cancelled before the account was free.</exception>
+    public Task<IDisposable> LockAccountAsync(Guid userId, CancellationToken cancellationToken = default)
+        => _accountLocks.AcquireAsync(userId, cancellationToken);
+
+    /// <summary>
     /// Gets the e-mail settings of a user.
     /// </summary>
     /// <param name="userId">The user id.</param>
@@ -210,6 +236,11 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
     /// <returns>The outcome.</returns>
     public async Task<ChangeResult> RequestChangeAsync(Guid userId, string newEmail, string currentPassword, string remoteEndPoint)
     {
+        if (!_gate.IsOpen)
+        {
+            return ChangeResult.Closed;
+        }
+
         var cfg = _config();
         if (!cfg.CanSendEmail())
         {
@@ -251,10 +282,13 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
         var lang = Languages.ForAccounts(cfg.DefaultLanguage);
         var token = _tokens.NewToken();
         var same = false;
+        UserEmail? previous = null;
+        var replacedTokens = new List<TokenRecord>();
         await _store.WriteAsync(d =>
         {
             d.Tokens.RemoveAll(t => t.ExpiresAt <= now);
             var index = d.Emails.FindIndex(e => e.UserId == userId);
+            previous = index >= 0 ? d.Emails[index] : null;
             var current = index >= 0 ? d.Emails[index] : new UserEmail(userId, null, null, lang, null);
             if (string.Equals(current.Email, address, StringComparison.OrdinalIgnoreCase))
             {
@@ -272,6 +306,7 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
                 d.Emails.Add(updated);
             }
 
+            replacedTokens.AddRange(d.Tokens.Where(t => t.UserId == userId && t.Purpose == TokenPurpose.ConfirmEmail));
             d.Tokens.RemoveAll(t => t.UserId == userId && t.Purpose == TokenPurpose.ConfirmEmail);
             d.Tokens.Add(new TokenRecord(_tokens.Hash(token), TokenPurpose.ConfirmEmail, userId, null, address, expires, 0));
         }).ConfigureAwait(false);
@@ -281,8 +316,32 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
             return ChangeResult.InvalidEmail;
         }
 
-        SendConfirmation(user.Username, userId, address, lang, token, expires, cfg);
-        return ChangeResult.Ok;
+        var queued = SendConfirmation(user.Username, userId, address, lang, token, expires, cfg);
+        if (queued == EnqueueResult.Queued)
+        {
+            return ChangeResult.Ok;
+        }
+
+        // The message was dropped: the user must not be told it was sent, and the pending change has no link to confirm it.
+        var hash = _tokens.Hash(token);
+        await _store.WriteAsync(d =>
+        {
+            d.Tokens.RemoveAll(t => t.Hash == hash);
+            d.Tokens.AddRange(replacedTokens);
+            var index = d.Emails.FindIndex(e => e.UserId == userId);
+            if (index >= 0 && string.Equals(d.Emails[index].PendingEmail, address, StringComparison.Ordinal))
+            {
+                if (previous is null)
+                {
+                    d.Emails.RemoveAt(index);
+                }
+                else
+                {
+                    d.Emails[index] = d.Emails[index] with { PendingEmail = previous.PendingEmail };
+                }
+            }
+        }).ConfigureAwait(false);
+        return queued == EnqueueResult.LimitReached ? ChangeResult.RateLimited : ChangeResult.Unavailable;
     }
 
     /// <summary>
@@ -324,12 +383,12 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
     /// </summary>
     /// <param name="token">The token of the e-mailed link.</param>
     /// <param name="purpose">The purpose of the token: <see cref="TokenPurpose.ConfirmEmail"/> or <see cref="TokenPurpose.CancelEmailChange"/>.</param>
-    /// <returns>The Mail Concierge default language, or null when the link is unknown or expired.</returns>
+    /// <returns>The Mail Concierge default language, or null when the link is unknown or expired or the service is closed.</returns>
     public async Task<string?> PeekLanguageAsync(string token, TokenPurpose purpose)
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(token))
+            if (!_gate.IsOpen || string.IsNullOrWhiteSpace(token))
             {
                 return null;
             }
@@ -355,12 +414,12 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
     /// </summary>
     /// <param name="token">The token of the e-mailed link.</param>
     /// <param name="clientIpKey">The client IP key, fed to the token-failure limiter.</param>
-    /// <returns>True when the address was confirmed.</returns>
+    /// <returns>True when the address was confirmed; false, with nothing consumed or counted, while the service is closed.</returns>
     public async Task<bool> ConfirmAsync(string token, string clientIpKey = "unknown")
     {
         try
         {
-            if (_limiter.IsBlocked(RateLimitBuckets.TokenFailIp, clientIpKey))
+            if (!_gate.IsOpen || _limiter.IsBlocked(RateLimitBuckets.TokenFailIp, clientIpKey))
             {
                 return false;
             }
@@ -457,12 +516,12 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
     /// <param name="currentPassword">The current password of the account.</param>
     /// <param name="clientIpKey">The client IP key, fed to the failure limiter.</param>
     /// <param name="remoteEndPoint">The client address, for the authentication.</param>
-    /// <returns>The outcome.</returns>
+    /// <returns>The outcome; <see cref="CancelResult.Invalid"/>, with nothing consumed or counted, while the service is closed.</returns>
     public async Task<CancelResult> CancelChangeAsync(string token, string currentPassword, string clientIpKey = "unknown", string remoteEndPoint = "")
     {
         try
         {
-            if (_limiter.IsBlocked(RateLimitBuckets.TokenFailIp, clientIpKey))
+            if (!_gate.IsOpen || _limiter.IsBlocked(RateLimitBuckets.TokenFailIp, clientIpKey))
             {
                 return CancelResult.Invalid;
             }
@@ -597,7 +656,7 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
         });
     }
 
-    private void SendConfirmation(string username, Guid userId, string address, string lang, string token, DateTime expires, PluginConfiguration cfg)
+    private EnqueueResult SendConfirmation(string username, Guid userId, string address, string lang, string token, DateTime expires, PluginConfiguration cfg)
     {
         var values = new Dictionary<string, string>
         {
@@ -607,7 +666,7 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
             ["expires"] = FormatDate(expires, lang),
         };
         var (subject, html, text) = EmailTemplates.Render("confirm-email", lang, values, cfg.TemplateOverrides);
-        _queue.Enqueue(new EmailMessage(address, subject, html, text, "confirm-email", userId));
+        return _queue.Enqueue(new EmailMessage(address, subject, html, text, "confirm-email", userId));
     }
 
     private string FormatDate(DateTime utc, string language)
@@ -618,16 +677,22 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
     private string ServerName() => Languages.ServerName(_host);
 
     /// <summary>
-    /// Checks the password of a user while holding a per-user gate, so that parallel requests cannot all pass the "too many wrong
-    /// passwords" test before the first failure is counted: at most the allowed number of wrong passwords reach Jellyfin.
+    /// Checks the password of a user while holding the account (<see cref="LockAccountAsync"/>), so that parallel requests, here
+    /// or at sign-in by address, cannot all pass the tests below before the first failure is counted. Jellyfin is not asked when
+    /// the hourly limit is used up, or when one more failure would reach its lockout threshold (read fresh, under the lock).
     /// </summary>
     private async Task<PasswordCheck> CheckPasswordAsync(Guid userId, string username, string password, string remoteEndPoint)
     {
-        var gate = _passwordGates.GetOrAdd(userId, static _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync().ConfigureAwait(false);
-        try
+        using (await LockAccountAsync(userId).ConfigureAwait(false))
         {
             if (_limiter.IsBlocked(RateLimitBuckets.PasswordFailUser, userId.ToString("N")))
+            {
+                return PasswordCheck.Locked;
+            }
+
+            // Answered like the hourly limit, without using it: the counter of Jellyfin never decays.
+            if (_users.GetUserById(userId) is not { } fresh
+                || AccountPolicy.NextFailureLocksOut(fresh.InvalidLoginAttemptCount, fresh.LoginAttemptsBeforeLockout))
             {
                 return PasswordCheck.Locked;
             }
@@ -639,10 +704,6 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
 
             RecordPasswordFailure(userId);
             return PasswordCheck.Wrong;
-        }
-        finally
-        {
-            gate.Release();
         }
     }
 

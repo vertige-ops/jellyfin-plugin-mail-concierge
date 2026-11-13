@@ -45,6 +45,10 @@ public class ProxyGuardTests
     [InlineData("fd00::1")]
     [InlineData("fe80::1")]
     [InlineData("::ffff:192.168.1.10")]
+    [InlineData("100.64.0.1")]
+    [InlineData("100.100.100.100")]
+    [InlineData("100.127.255.254")]
+    [InlineData("::ffff:100.64.0.1")]
     public void ProxyGuard_Trips_WhenPrivatePeerSendsForwardedFor_AndNoKnownProxies(string peer)
     {
         var (guard, _) = Make();
@@ -65,6 +69,8 @@ public class ProxyGuardTests
     [Theory]
     [InlineData("203.0.113.9", true)]
     [InlineData("172.32.0.1", true)]
+    [InlineData("100.63.255.255", true)]
+    [InlineData("100.128.0.0", true)]
     [InlineData("10.0.0.1", false)]
     [InlineData(null, true)]
     public void ProxyGuard_DoesNotTrip_ForPublicPeerNoHeaderOrNullPeer(string? peer, bool forwarded)

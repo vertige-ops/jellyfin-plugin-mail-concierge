@@ -15,6 +15,7 @@ using Jellyfin.Plugin.MailConcierge.Configuration;
 using Jellyfin.Plugin.MailConcierge.Data;
 using Jellyfin.Plugin.MailConcierge.Email;
 using Jellyfin.Plugin.MailConcierge.Security;
+using Jellyfin.Plugin.MailConcierge.Seerr;
 using Jellyfin.Plugin.MailConcierge.Web;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Controller;
@@ -223,6 +224,26 @@ public sealed class ForgotPasswordFilterTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task GuardTripped_WhileEnabled_NeverHandsTheEndpointsToJellyfin()
+    {
+        var filter = MakeFilter(_fake);
+        var neutral = Context("ForgotPassword", "ghost", "198.51.100.1");
+        await Run(filter, neutral, _fake);
+        Tests.Security.Guards.Trip(_guard);
+
+        // Run throws if the native action is called.
+        var forgot = Context("ForgotPassword", "alice", "203.0.113.7");
+        await Run(filter, forgot, _fake);
+        var pin = Context("ForgotPasswordPin", null, "203.0.113.7");
+        await Run(filter, pin, _fake);
+
+        Assert.Equal(Serialize(neutral.Result), Serialize(forgot.Result));
+        Assert.Equal(404, Assert.IsType<ContentResult>(pin.Result).StatusCode);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        Assert.Empty(_transport.Sent);
+    }
+
+    [Fact]
     public async Task Filter_IgnoresOtherActions()
     {
         var filter = MakeFilter(_fake);
@@ -273,8 +294,9 @@ public sealed class ForgotPasswordFilterTests : IAsyncDisposable
     private ForgotPasswordFilter MakeFilter(TimeProvider time)
     {
         var closer = new SessionCloser(_devices.Object, _sessions.Object, time, NullLogger<SessionCloser>.Instance);
+        var email = new EmailService(_store, _tokens, _limiter, _queue, _users.Object, closer, Mock.Of<ISeerrSync>(), _host.Object, () => _config, new ServiceGate(() => _config, _guard), time, NullLogger<EmailService>.Instance);
         var recovery = new RecoveryService(
-            _store, _tokens, _limiter, _queue, _guard, _users.Object, closer, _host.Object, () => _config, time, NullLogger<RecoveryService>.Instance);
+            _store, _tokens, _limiter, _queue, new ServiceGate(() => _config, _guard), _users.Object, new EmailLoginResolver(_users.Object, email, () => _config), closer, _host.Object, () => _config, time, NullLogger<RecoveryService>.Instance);
         var services = new ServiceCollection();
         services.AddSingleton<Func<PluginConfiguration>>(() => _config);
         services.AddSingleton(_guard);

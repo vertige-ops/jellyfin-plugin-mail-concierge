@@ -17,6 +17,9 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Gets or sets a value indicating whether the native forgot-password flow of Jellyfin is used instead of Mail Concierge's e-mail recovery.</summary>
     public bool NativeForgotPassword { get; set; }
 
+    /// <summary>Gets or sets a value indicating whether an account can sign in with its confirmed e-mail address in place of its user name.</summary>
+    public bool EmailLogin { get; set; }
+
     /// <summary>Gets or sets the public base URL used to build every link in e-mails.</summary>
     public string PublicUrl { get; set; } = string.Empty;
 

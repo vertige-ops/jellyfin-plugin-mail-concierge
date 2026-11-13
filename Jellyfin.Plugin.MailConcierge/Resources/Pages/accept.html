@@ -2,7 +2,7 @@
 <form id="accept-form" class="form" data-step="form" novalidate>
 <p>{{s:page.accept.intro}}</p>
 <label for="username">{{s:page.accept.username}}</label>
-<input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{username}}" required>
+<input id="username" name="username" type="text" maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{username}}" required>
 <p id="username-hint" class="hint" hidden></p>
 <label for="email">{{s:page.accept.email}}</label>
 <input id="email" name="email" type="email" autocomplete="email" value="{{email}}" required>

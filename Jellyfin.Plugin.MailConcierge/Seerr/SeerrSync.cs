@@ -178,19 +178,40 @@ public sealed class SeerrSync : ISeerrSync
     }
 
     /// <summary>
-    /// Stores the selected candidates as confirmed addresses. The addresses are read from Seerr again, never taken from the caller.
-    /// Nothing is pushed back to Seerr.
+    /// Stores the addresses the administrator saw in the preview, as confirmed addresses. Seerr is read again and a pair is
+    /// stored only when Seerr still returns, for that user, the posted address; the others are skipped. Nothing is pushed back to Seerr.
     /// </summary>
-    /// <param name="userIds">The Jellyfin user ids to import.</param>
-    /// <returns>The number of addresses stored.</returns>
-    public async Task<int> ApplyImportAsync(IEnumerable<Guid> userIds)
+    /// <param name="items">The pairs of Jellyfin user id and address seen in the preview.</param>
+    /// <returns>The number of addresses stored, and the number skipped because Seerr no longer returns the posted address.</returns>
+    /// <exception cref="SeerrUnavailableException">Seerr is disabled or unreachable.</exception>
+    public async Task<SeerrImportResult> ApplyImportAsync(IEnumerable<SeerrImportItem> items)
     {
-        ArgumentNullException.ThrowIfNull(userIds);
-        var selected = userIds.ToHashSet();
-        var chosen = (await PreviewImportAsync().ConfigureAwait(false)).Where(c => selected.Contains(c.UserId)).ToList();
+        ArgumentNullException.ThrowIfNull(items);
+        var posted = items.ToList();
+        var current = (await PreviewImportAsync().ConfigureAwait(false)).ToDictionary(c => c.UserId);
+        var chosen = new List<ImportCandidate>();
+        var changed = 0;
+        foreach (var item in posted.Where(i => i is not null).DistinctBy(i => i.UserId))
+        {
+            if (!current.TryGetValue(item.UserId, out var candidate))
+            {
+                continue;
+            }
+
+            if (Accounts.EmailService.TryNormalize(item.Email ?? string.Empty, out var address)
+                && string.Equals(address, candidate.Email, StringComparison.OrdinalIgnoreCase))
+            {
+                chosen.Add(candidate);
+            }
+            else
+            {
+                changed++;
+            }
+        }
+
         if (chosen.Count == 0)
         {
-            return 0;
+            return new SeerrImportResult(0, changed);
         }
 
         var now = _time.GetUtcNow().UtcDateTime;
@@ -213,7 +234,7 @@ public sealed class SeerrSync : ISeerrSync
                 d.Tokens.RemoveAll(t => t.UserId == candidate.UserId && t.Purpose == TokenPurpose.ConfirmEmail);
             }
         }).ConfigureAwait(false);
-        return chosen.Count;
+        return new SeerrImportResult(chosen.Count, changed);
     }
 
     /// <summary>Pushes one user. Returns false when it must be retried later.</summary>

@@ -26,10 +26,12 @@ public sealed class PublicController : ControllerBase
 {
     private const string UnknownClientKey = "unknown";
     private const int MaxBodyBytes = 4096;
+    private const int MaxPageViews = 30;
 
     // A 1 MiB picture is about 1.4 MB in base64, plus the other fields.
     private const int MaxAcceptBodyBytes = 1_600_000;
 
+    private static readonly TimeSpan PageViewWindow = TimeSpan.FromMinutes(5);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly RecoveryService _recovery;
@@ -37,6 +39,8 @@ public sealed class PublicController : ControllerBase
     private readonly InvitationService _invitations;
     private readonly PageRenderer _renderer;
     private readonly ProxyGuard _guard;
+    private readonly ServiceGate _gate;
+    private readonly RateLimiter _limiter;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PublicController"/> class.
@@ -46,13 +50,17 @@ public sealed class PublicController : ControllerBase
     /// <param name="invitations">The invitation service.</param>
     /// <param name="renderer">The page renderer.</param>
     /// <param name="guard">The reverse-proxy guard.</param>
-    public PublicController(RecoveryService recovery, EmailService email, InvitationService invitations, PageRenderer renderer, ProxyGuard guard)
+    /// <param name="gate">Tells whether the service is open (enabled, proxy guard quiet).</param>
+    /// <param name="limiter">The rate limiter.</param>
+    public PublicController(RecoveryService recovery, EmailService email, InvitationService invitations, PageRenderer renderer, ProxyGuard guard, ServiceGate gate, RateLimiter limiter)
     {
         _recovery = recovery;
         _email = email;
         _invitations = invitations;
         _renderer = renderer;
         _guard = guard;
+        _gate = gate;
+        _limiter = limiter;
     }
 
     /// <summary>
@@ -60,12 +68,17 @@ public sealed class PublicController : ControllerBase
     /// </summary>
     /// <param name="t">The token of the e-mailed link.</param>
     /// <param name="s">A reset session already obtained from a PIN.</param>
-    /// <returns>The page.</returns>
+    /// <returns>The page; the generic message page while the service is closed.</returns>
     [HttpGet("Reset")]
     [Produces(MediaTypeNames.Text.Html)]
     public async Task<ActionResult> Reset([FromQuery] string? t, [FromQuery] string? s)
     {
-        if (string.IsNullOrWhiteSpace(t) && string.IsNullOrWhiteSpace(s))
+        if (TooManyPageViews())
+        {
+            return TooManyPage();
+        }
+
+        if (!_gate.IsOpen || (string.IsNullOrWhiteSpace(t) && string.IsNullOrWhiteSpace(s)))
         {
             return Page("message");
         }
@@ -84,21 +97,35 @@ public sealed class PublicController : ControllerBase
     /// Shows the e-mail confirmation page. The token is not consumed.
     /// </summary>
     /// <param name="t">The token of the e-mailed link.</param>
-    /// <returns>The page.</returns>
+    /// <returns>The page; the generic message page while the service is closed.</returns>
     [HttpGet("Confirm")]
     [Produces(MediaTypeNames.Text.Html)]
     public async Task<ActionResult> ConfirmPage([FromQuery] string? t)
-        => string.IsNullOrWhiteSpace(t) ? Page("message") : Page("confirm", await _email.PeekLanguageAsync(t, TokenPurpose.ConfirmEmail).ConfigureAwait(false));
+    {
+        if (TooManyPageViews())
+        {
+            return TooManyPage();
+        }
+
+        return !_gate.IsOpen || string.IsNullOrWhiteSpace(t) ? Page("message") : Page("confirm", await _email.PeekLanguageAsync(t, TokenPurpose.ConfirmEmail).ConfigureAwait(false));
+    }
 
     /// <summary>
     /// Shows the e-mail change cancellation page. The token is not consumed.
     /// </summary>
     /// <param name="t">The token of the e-mailed link.</param>
-    /// <returns>The page.</returns>
+    /// <returns>The page; the generic message page while the service is closed.</returns>
     [HttpGet("Cancel")]
     [Produces(MediaTypeNames.Text.Html)]
     public async Task<ActionResult> CancelPage([FromQuery] string? t)
-        => string.IsNullOrWhiteSpace(t) ? Page("message") : Page("cancel", await _email.PeekLanguageAsync(t, TokenPurpose.CancelEmailChange).ConfigureAwait(false));
+    {
+        if (TooManyPageViews())
+        {
+            return TooManyPage();
+        }
+
+        return !_gate.IsOpen || string.IsNullOrWhiteSpace(t) ? Page("message") : Page("cancel", await _email.PeekLanguageAsync(t, TokenPurpose.CancelEmailChange).ConfigureAwait(false));
+    }
 
     /// <summary>
     /// Shows the account creation page of an invitation. The invitation is not consumed.
@@ -109,6 +136,11 @@ public sealed class PublicController : ControllerBase
     [Produces(MediaTypeNames.Text.Html)]
     public async Task<ActionResult> AcceptPage([FromQuery] string? t)
     {
+        if (TooManyPageViews())
+        {
+            return TooManyPage();
+        }
+
         var view = string.IsNullOrWhiteSpace(t) ? null : await _invitations.PeekAsync(t, ClientKey()).ConfigureAwait(false);
         if (view is null)
         {
@@ -330,6 +362,23 @@ public sealed class PublicController : ControllerBase
     private ActionResult Page(string page, string? pageLanguage = null)
     {
         var result = _renderer.Render(page, Languages.Parse(pageLanguage) ?? Language(), new { });
+        SecurityHeaders.Apply(Response, result.Nonce);
+        return result;
+    }
+
+    // Counted before anything else, the gate and the token included, so a flood is bounded in every state of the plugin.
+    // The proxy guard looks at the request here too: most visits start with a page view, which shows a proxy as well as a POST does.
+    private bool TooManyPageViews()
+    {
+        _guard.Observe(HttpContext);
+        return !_limiter.TryAcquire(RateLimitBuckets.PageViewIp, ClientKey(), MaxPageViews, PageViewWindow);
+    }
+
+    private ActionResult TooManyPage()
+    {
+        var result = _renderer.Render("toomany", Language(), new { });
+        result.StatusCode = StatusCodes.Status429TooManyRequests;
+        Response.Headers.CacheControl = "no-store";
         SecurityHeaders.Apply(Response, result.Nonce);
         return result;
     }

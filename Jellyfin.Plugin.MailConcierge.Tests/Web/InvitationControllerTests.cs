@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,6 +13,7 @@ using Jellyfin.Plugin.MailConcierge.Email;
 using Jellyfin.Plugin.MailConcierge.Invitations;
 using Jellyfin.Plugin.MailConcierge.Security;
 using Jellyfin.Plugin.MailConcierge.Seerr;
+using Jellyfin.Plugin.MailConcierge.Tests.Security;
 using Jellyfin.Plugin.MailConcierge.Web;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
@@ -41,11 +43,12 @@ public sealed class InvitationControllerTests : IDisposable
         _store = new MailConciergeStore(_dir);
         var tokens = new TokenService(_dir);
         var limiter = new RateLimiter(_time);
-        _queue = new EmailQueue(() => _config, Mock.Of<IEmailTransport>(), limiter, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero });
+        _queue = new EmailQueue(() => _config, Mock.Of<IEmailTransport>(), limiter, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero }, 5);
         var users = new Mock<IUserManager>();
         var host = Mock.Of<IServerApplicationHost>();
-        var email = new EmailService(_store, tokens, limiter, _queue, users.Object, new SessionCloser(Mock.Of<IDeviceManager>(), Mock.Of<ISessionManager>(), _time, NullLogger<SessionCloser>.Instance), new NullSeerrSync(), host, () => _config, _time, NullLogger<EmailService>.Instance);
-        var service = new InvitationService(_store, tokens, limiter, _queue, users.Object, email, host, () => _config, _time, NullLogger<InvitationService>.Instance);
+        var gate = new ServiceGate(() => _config, Guards.Quiet());
+        var email = new EmailService(_store, tokens, limiter, _queue, users.Object, new SessionCloser(Mock.Of<IDeviceManager>(), Mock.Of<ISessionManager>(), _time, NullLogger<SessionCloser>.Instance), new NullSeerrSync(), host, () => _config, gate, _time, NullLogger<EmailService>.Instance);
+        var service = new InvitationService(_store, tokens, limiter, _queue, users.Object, Mock.Of<ISessionManager>(), email, host, () => _config, gate, _time, NullLogger<InvitationService>.Instance);
         var libraries = new Mock<ILibraryManager>();
         libraries.Setup(l => l.GetVirtualFolders()).Returns(new System.Collections.Generic.List<VirtualFolderInfo> { new() { ItemId = _library.ToString("N"), Name = "Films" } });
         _controller = new InvitationController(service, libraries.Object, () => _config)
@@ -54,11 +57,48 @@ public sealed class InvitationControllerTests : IDisposable
         };
     }
 
+    private async Task<JsonElement> PostCreate(string username, string? email)
+        => JsonDocument.Parse(Assert.IsType<ContentResult>(await _controller.Create(new CreateInvitationRequest(username, email, Array.Empty<string>(), null, "en"))).Content!).RootElement;
+
+    private void FillQueue()
+    {
+        // The worker is not started, so the queue only fills up.
+        while (_queue.Enqueue(new EmailMessage("x@example.org", "s", "<p>h</p>", "t", "email-changed", Guid.NewGuid())) == EnqueueResult.Queued)
+        {
+        }
+    }
+
     public void Dispose()
     {
         _queue.Dispose();
         _store.Dispose();
         Directory.Delete(_dir, true);
+    }
+
+    [Fact]
+    public async Task Delete_WithoutErase_Revokes_AndWithEraseTrue_ErasesTheRecord()
+    {
+        var kept = (await PostCreate("alice", null)).GetProperty("id").GetGuid();
+        var erased = (await PostCreate("bob", null)).GetProperty("id").GetGuid();
+        var revoked = (await PostCreate("carol", null)).GetProperty("id").GetGuid();
+
+        foreach (var answer in new[] { await _controller.Revoke(revoked), await _controller.Revoke(kept, false) })
+        {
+            var ok = Assert.IsType<ContentResult>(answer);
+            Assert.Equal(StatusCodes.Status200OK, ok.StatusCode);
+            Assert.Equal("{}", ok.Content);
+        }
+
+        var done = Assert.IsType<ContentResult>(await _controller.Revoke(erased, true));
+        Assert.Equal(StatusCodes.Status200OK, done.StatusCode);
+        Assert.Equal("{}", done.Content);
+
+        var listed = JsonDocument.Parse(Assert.IsType<ContentResult>(await _controller.List()).Content!).RootElement.EnumerateArray()
+            .ToDictionary(i => i.GetProperty("id").GetGuid(), i => i.GetProperty("state").GetString());
+        Assert.Equal(2, listed.Count);
+        Assert.Equal("Revoked", listed[kept]);
+        Assert.Equal("Revoked", listed[revoked]);
+        Assert.DoesNotContain(erased, listed.Keys);
     }
 
     [Fact]
@@ -95,6 +135,42 @@ public sealed class InvitationControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task Create_WhenQueueFull_ReturnsLinkAndQueueFullStatus()
+    {
+        _config.SmtpHost = "smtp.example";
+        _config.FromAddress = "jf@example.com";
+        FillQueue();
+
+        var body = await PostCreate("bob", "bob@example.org");
+
+        Assert.False(body.GetProperty("emailed").GetBoolean());
+        Assert.Equal("queue_full", body.GetProperty("emailStatus").GetString());
+        Assert.StartsWith("https://jf.example/", body.GetProperty("link").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Regenerate_ReturnsEmailStatus()
+    {
+        _config.SmtpHost = "smtp.example";
+        _config.FromAddress = "jf@example.com";
+        var withAddress = await PostCreate("bob", "bob@example.org");
+        var withoutAddress = await PostCreate("carol", null);
+
+        var sent = JsonDocument.Parse(Assert.IsType<ContentResult>(await _controller.Regenerate(withAddress.GetProperty("id").GetGuid())).Content!).RootElement;
+        var none = JsonDocument.Parse(Assert.IsType<ContentResult>(await _controller.Regenerate(withoutAddress.GetProperty("id").GetGuid())).Content!).RootElement;
+        FillQueue();
+        var full = JsonDocument.Parse(Assert.IsType<ContentResult>(await _controller.Regenerate(withAddress.GetProperty("id").GetGuid())).Content!).RootElement;
+
+        Assert.True(sent.GetProperty("emailed").GetBoolean());
+        Assert.Equal("queued", sent.GetProperty("emailStatus").GetString());
+        Assert.False(none.GetProperty("emailed").GetBoolean());
+        Assert.Equal("none", none.GetProperty("emailStatus").GetString());
+        Assert.False(full.GetProperty("emailed").GetBoolean());
+        Assert.Equal("queue_full", full.GetProperty("emailStatus").GetString());
+        Assert.StartsWith("https://jf.example/", full.GetProperty("link").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Create_WithEmail_WhenSmtpIsNotConfigured_ReportsNotConfigured()
     {
         var created = JsonDocument.Parse(Assert.IsType<ContentResult>(await _controller.Create(new CreateInvitationRequest("alice", "a@example.org", Array.Empty<string>(), null, "en"))).Content!).RootElement;
@@ -125,6 +201,22 @@ public sealed class InvitationControllerTests : IDisposable
         var result = Assert.IsType<ContentResult>(await _controller.Create(new CreateInvitationRequest("alice", null, new[] { Guid.NewGuid().ToString("N") }, null, "en")));
 
         Assert.Equal(400, result.StatusCode);
+    }
+
+    [Fact]
+    public async Task Closed_Create_Returns409ServiceClosed()
+    {
+        var created = JsonDocument.Parse(Assert.IsType<ContentResult>(await _controller.Create(new CreateInvitationRequest("alice", null, Array.Empty<string>(), null, "en"))).Content!).RootElement;
+        _config.Enabled = false;
+
+        var create = Assert.IsType<ContentResult>(await _controller.Create(new CreateInvitationRequest("bob", null, Array.Empty<string>(), null, "en")));
+        var regenerate = Assert.IsType<ContentResult>(await _controller.Regenerate(created.GetProperty("id").GetGuid()));
+
+        foreach (var result in new[] { create, regenerate })
+        {
+            Assert.Equal(409, result.StatusCode);
+            Assert.Equal("service_closed", JsonDocument.Parse(result.Content!).RootElement.GetProperty("code").GetString());
+        }
     }
 
     [Fact]

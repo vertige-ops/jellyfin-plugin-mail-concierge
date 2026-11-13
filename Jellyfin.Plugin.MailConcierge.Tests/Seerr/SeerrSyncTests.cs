@@ -35,7 +35,7 @@ public sealed class SeerrSyncTests : IDisposable
     {
         Directory.CreateDirectory(_dir);
         _store = new MailConciergeStore(_dir);
-        var client = new SeerrClient(new FakeFactory(_seerr), () => _config, NullLogger<SeerrClient>.Instance);
+        var client = new SeerrClient(new FakeFactory(_seerr), () => _config, NullLogger<SeerrClient>.Instance, TimeProvider.System);
         _sync = new SeerrSync(_store, client, _users.Object, () => _config, TimeProvider.System, NullLogger<SeerrSync>.Instance);
         _users.Setup(u => u.GetUserById(_bob.Id)).Returns(_bob);
         _users.Setup(u => u.GetUserById(_eve.Id)).Returns(_eve);
@@ -141,14 +141,15 @@ public sealed class SeerrSyncTests : IDisposable
     }
 
     [Fact]
-    public async Task Import_StoresConfirmed()
+    public async Task Import_StoresConfirmed_OnlyThePostedPairsStillReturnedBySeerr()
     {
         _seerr.Users[1] = new FakeUser(_bob.Id, "bob@example.org");
         _seerr.Users[2] = new FakeUser(_eve.Id, "eve@example.org");
 
-        var count = await _sync.ApplyImportAsync([_bob.Id, Guid.NewGuid()]);
+        var result = await _sync.ApplyImportAsync([new SeerrImportItem(_bob.Id, "bob@example.org"), new SeerrImportItem(Guid.NewGuid(), "ghost@example.org")]);
 
-        Assert.Equal(1, count);
+        Assert.Equal(1, result.Imported);
+        Assert.Equal(0, result.Changed);
         var emails = await _store.ReadAsync(d => d.Emails.ToList());
         var stored = Assert.Single(emails);
         Assert.Equal(_bob.Id, stored.UserId);
@@ -156,6 +157,69 @@ public sealed class SeerrSyncTests : IDisposable
         Assert.Null(stored.PendingEmail);
         Assert.NotNull(stored.ConfirmedAt);
         Assert.Empty(_seerr.Posts);
+    }
+
+    [Fact]
+    public async Task Import_ANullItem_IsSkipped_AndTheValidPairIsStored()
+    {
+        _seerr.Users[1] = new FakeUser(_bob.Id, "bob@example.org");
+
+        var result = await _sync.ApplyImportAsync([null!, new SeerrImportItem(_bob.Id, "bob@example.org")]);
+
+        Assert.Equal(1, result.Imported);
+        Assert.Equal(0, result.Changed);
+        Assert.Equal(_bob.Id, Assert.Single(await _store.ReadAsync(d => d.Emails.ToList())).UserId);
+    }
+
+    [Fact]
+    public async Task Import_AddressChangedInSeerrSinceThePreview_IsNotStoredAndIsCounted()
+    {
+        await _store.WriteAsync(d => d.Emails.Add(new UserEmail(_bob.Id, "bob@example.com", null, "fr", DateTime.UtcNow)));
+        _seerr.Users[1] = new FakeUser(_bob.Id, "attacker@example.net");
+
+        var result = await _sync.ApplyImportAsync([new SeerrImportItem(_bob.Id, "bob@example.org")]);
+
+        Assert.Equal(0, result.Imported);
+        Assert.Equal(1, result.Changed);
+        Assert.Equal("bob@example.com", Assert.Single(await _store.ReadAsync(d => d.Emails.ToList())).Email);
+    }
+
+    [Fact]
+    public async Task Import_UserNoLongerReturnedBySeerr_IsSkipped()
+    {
+        _seerr.Users[2] = new FakeUser(_eve.Id, "eve@example.org");
+
+        var result = await _sync.ApplyImportAsync([new SeerrImportItem(_bob.Id, "bob@example.org")]);
+
+        Assert.Equal(0, result.Imported);
+        Assert.Empty(await _store.ReadAsync(d => d.Emails.ToList()));
+    }
+
+    [Fact]
+    public async Task Import_CaseOnlyDifference_IsStored()
+    {
+        _seerr.Users[1] = new FakeUser(_bob.Id, "Bob@Example.org");
+
+        var result = await _sync.ApplyImportAsync([new SeerrImportItem(_bob.Id, "bob@example.ORG")]);
+
+        Assert.Equal(1, result.Imported);
+        Assert.Equal(0, result.Changed);
+        Assert.Single(await _store.ReadAsync(d => d.Emails.ToList()));
+    }
+
+    [Fact]
+    public async Task Preview_AndImport_WhenSeerrListsTooManyUsers_ReportUnreachableAndStoreNothing()
+    {
+        for (var i = 10; i < 10_020; i++)
+        {
+            _seerr.Users[i] = new FakeUser(null, "u" + i + "@example.org");
+        }
+
+        _seerr.Users[1] = new FakeUser(_bob.Id, "bob@example.org");
+
+        Assert.Equal("seerr_unreachable", (await Assert.ThrowsAsync<SeerrUnavailableException>(() => _sync.PreviewImportAsync())).Code);
+        Assert.Equal("seerr_unreachable", (await Assert.ThrowsAsync<SeerrUnavailableException>(() => _sync.ApplyImportAsync([new SeerrImportItem(_bob.Id, "bob@example.org")]))).Code);
+        Assert.Empty(await _store.ReadAsync(d => d.Emails.ToList()));
     }
 
     [Fact]
@@ -174,7 +238,7 @@ public sealed class SeerrSyncTests : IDisposable
         _seerr.Down = true;
 
         Assert.Equal("seerr_unreachable", (await Assert.ThrowsAsync<SeerrUnavailableException>(() => _sync.PreviewImportAsync())).Code);
-        Assert.Equal("seerr_unreachable", (await Assert.ThrowsAsync<SeerrUnavailableException>(() => _sync.ApplyImportAsync([_bob.Id]))).Code);
+        Assert.Equal("seerr_unreachable", (await Assert.ThrowsAsync<SeerrUnavailableException>(() => _sync.ApplyImportAsync([new SeerrImportItem(_bob.Id, "bob@example.org")]))).Code);
         Assert.Equal("seerr_unreachable", (await Assert.ThrowsAsync<SeerrUnavailableException>(() => _sync.SyncNowAsync())).Code);
     }
 
@@ -184,7 +248,7 @@ public sealed class SeerrSyncTests : IDisposable
         _config.SeerrEnabled = false;
 
         Assert.Equal("seerr_disabled", (await Assert.ThrowsAsync<SeerrUnavailableException>(() => _sync.PreviewImportAsync())).Code);
-        Assert.Equal("seerr_disabled", (await Assert.ThrowsAsync<SeerrUnavailableException>(() => _sync.ApplyImportAsync([_bob.Id]))).Code);
+        Assert.Equal("seerr_disabled", (await Assert.ThrowsAsync<SeerrUnavailableException>(() => _sync.ApplyImportAsync([new SeerrImportItem(_bob.Id, "bob@example.org")]))).Code);
         Assert.Equal("seerr_disabled", (await Assert.ThrowsAsync<SeerrUnavailableException>(() => _sync.SyncNowAsync())).Code);
     }
 
@@ -201,7 +265,7 @@ public sealed class SeerrSyncTests : IDisposable
         {
             Assert.IsType<Microsoft.AspNetCore.Mvc.ContentResult>(await controller.SeerrImportPreview()),
             Assert.IsType<Microsoft.AspNetCore.Mvc.ContentResult>(await controller.SeerrSyncNow()),
-            Assert.IsType<Microsoft.AspNetCore.Mvc.ContentResult>(await controller.SeerrImport(new Jellyfin.Plugin.MailConcierge.Web.SeerrImportRequest([_bob.Id]))),
+            Assert.IsType<Microsoft.AspNetCore.Mvc.ContentResult>(await controller.SeerrImport(new Jellyfin.Plugin.MailConcierge.Web.SeerrImportRequest([new SeerrImportItem(_bob.Id, "bob@example.org")]))),
         };
         Assert.All(down, r =>
         {

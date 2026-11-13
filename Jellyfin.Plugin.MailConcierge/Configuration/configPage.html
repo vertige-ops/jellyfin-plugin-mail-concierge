@@ -19,6 +19,8 @@
             #MailConciergeConfigPage .ucHelp:hover, #MailConciergeConfigPage .ucHelp:focus { opacity: 1; outline: 2px solid #00a4dc; outline-offset: 2px; }
             #MailConciergeConfigPage .ucHelp::after { content: attr(data-tip); display: none; position: absolute; z-index: 10; left: 0; top: 1.9em; width: 18em; max-width: 70vw; padding: 0.6em 0.8em; background: #202020; color: #fff; border: 1px solid #00a4dc; border-radius: 4px; font-size: 1.15em; font-weight: normal; line-height: 1.4; text-align: left; white-space: normal; }
             #MailConciergeConfigPage .ucHelp:hover::after, #MailConciergeConfigPage .ucHelp:focus::after { display: block; }
+            /* An emby-button has its own display rule, which would otherwise win over the hidden attribute. */
+            #ucClearSmtpPassword[hidden] { display: none; }
         </style>
         <div data-role="content">
             <div class="content-primary">
@@ -42,25 +44,25 @@
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label"><input data-f="enabled" type="checkbox" is="emby-checkbox" /><span data-t="enabled"></span></label>
                     </div>
-                    <div class="checkboxContainer checkboxContainer-withDescription">
-                        <label class="emby-checkbox-label"><input data-f="nativeForgotPassword" type="checkbox" is="emby-checkbox" /><span data-t="native"></span></label>
-                        <div class="fieldDescription checkboxFieldDescription" data-t="nativeHint"></div>
-                    </div>
                     <div class="inputContainer">
                         <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="publicUrl"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.publicUrl"></span></div>
                         <input data-f="publicUrl" type="url" is="emby-input" autocomplete="off" />
                         <div class="fieldDescription" data-t="publicUrlHint"></div>
                         <div id="ucWarnPublicUrl" class="fieldDescription ucWarn" role="status" data-t="warnHttpPublicUrl" hidden>This URL starts with http://: the links in e-mails will travel unencrypted.</div>
                     </div>
-                    <div class="selectContainer">
-                        <div class="ucHelpRow"><label class="selectLabel" data-t="defaultLanguage"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.defaultLanguage"></span></div>
-                        <select is="emby-select" data-f="defaultLanguage" class="emby-select-withcolor emby-select">
-                        </select>
-                        <div class="fieldDescription" data-t="defaultLanguageHint"></div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <div class="ucHelpRow"><label class="emby-checkbox-label"><input data-f="emailLogin" type="checkbox" is="emby-checkbox" /><span data-t="emailLogin"></span></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.emailLogin"></span></div>
+                        <div id="ucEmailLoginUnavailable" class="fieldDescription checkboxFieldDescription ucWarn" role="status" hidden></div>
+                        <div id="ucEmailLoginShared" class="fieldDescription checkboxFieldDescription" role="status" hidden></div>
+                        <div id="ucEmailLoginSharedAccounts" class="fieldDescription checkboxFieldDescription" role="status" hidden></div>
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <div class="ucHelpRow"><label class="emby-checkbox-label"><input data-f="allowAdministrators" type="checkbox" is="emby-checkbox" /><span data-t="allowAdmins"></span></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.allowAdministrators"></span></div>
                         <div class="fieldDescription checkboxFieldDescription" data-t="allowAdminsHint"></div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input data-f="nativeForgotPassword" type="checkbox" is="emby-checkbox" /><span data-t="native"></span></label>
+                        <div class="fieldDescription checkboxFieldDescription" data-t="nativeHint"></div>
                     </div>
                     <div class="selectContainer">
                         <div class="ucHelpRow"><label class="selectLabel" data-t="sessions"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.sessionsOnReset"></span></div>
@@ -155,6 +157,7 @@
                         <label class="inputLabel inputLabelUnfocused" data-t="smtpPassword"></label>
                         <input data-f="smtpPassword" data-secret="smtpPasswordSet" type="password" is="emby-input" autocomplete="new-password" />
                         <div class="fieldDescription" data-t="secretHint"></div>
+                        <button is="emby-button" type="button" class="raised emby-button" id="ucClearSmtpPassword" hidden><span data-t="smtpPasswordClear"></span></button>
                     </div>
                     <div class="inputContainer">
                         <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="fromAddress"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.fromAddress"></span></div>
@@ -183,6 +186,12 @@
                 <div class="ucTab" id="ucTab-templates" role="tabpanel" aria-labelledby="ucTabBtn-templates" hidden>
                     <form data-tab-form="templates">
                     <h3><span data-t="secTemplates"></span><span class="ucHelp" tabindex="0" role="img" aria-label="" data-help="help.templates"></span></h3>
+                    <div class="selectContainer">
+                        <div class="ucHelpRow"><label class="selectLabel" data-t="defaultLanguage"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.defaultLanguage"></span></div>
+                        <select is="emby-select" data-f="defaultLanguage" class="emby-select-withcolor emby-select">
+                        </select>
+                        <div class="fieldDescription" data-t="defaultLanguageHint"></div>
+                    </div>
                     <p class="fieldDescription" data-t="templatesHint"></p>
                     <p class="fieldDescription" id="ucTemplatesLang"></p>
                     <div id="ucTemplates"></div>
@@ -224,6 +233,7 @@
                 <button is="emby-button" type="button" class="raised emby-button" id="ucPreview"><span data-t="preview"></span></button>
                 <p id="ucSeerrResult" hidden></p>
                 <div id="ucImportBox" hidden>
+                    <p class="fieldDescription" id="ucImportWarn" role="status" data-t="importWarning"></p>
                     <table style="width:100%;margin:1em 0;text-align:left">
                         <thead><tr><th></th><th data-t="colUser"></th><th data-t="colSeerr"></th><th data-t="colCurrent"></th></tr></thead>
                         <tbody id="ucImportRows"></tbody>
@@ -482,6 +492,7 @@
                             el.value = config[key] === null || config[key] === undefined ? '' : config[key];
                         }
                     });
+                    if (!only || only === 'smtp') { $('ucClearSmtpPassword').hidden = !config.smtpPasswordSet; }
                     updateWarnings();
                     if (!only || only === 'templates') {
                         loadedOverrides = Object.assign({}, config.templateOverrides || {});
@@ -494,6 +505,10 @@
                     var body = {};
                     Array.prototype.forEach.call(fields(tab), function (el) {
                         var key = el.getAttribute('data-f');
+                        // A disabled control (the e-mail sign-in box when the server does not offer it) is not sent, so its stored value is kept.
+                        if (el.disabled) {
+                            return;
+                        }
                         if (el.type === 'checkbox') {
                             body[key] = el.checked;
                         } else if (el.getAttribute('data-secret')) {
@@ -513,7 +528,7 @@
                     return body;
                 }
 
-                // Textareas for the e-mail language chosen in the General tab (its current value, saved or not).
+                // Textareas for the e-mail language chosen at the top of this tab (its current value, saved or not).
                 function buildTemplates() {
                     var box = $('ucTemplates');
                     box.textContent = '';
@@ -557,7 +572,15 @@
                         el.setAttribute('aria-selected', on ? 'true' : 'false');
                         el.style.opacity = on ? '1' : '0.6';
                         el.style.fontWeight = on ? 'bold' : '';
+                        // Jellyfin's accent colour: the open tab is the one painted with it, whichever button has the focus.
+                        el.classList.toggle('button-submit', on);
                     });
+                    // Jellyfin's view auto-focus (or a click) may have left the focus on another tab button, which the focus style would paint in the accent colour.
+                    var focused = document.activeElement;
+                    if (focused && focused.classList && focused.classList.contains('ucTabBtn') && focused.getAttribute('data-tab') !== id) {
+                        var open = page.querySelector('.ucTabBtn[data-tab="' + id + '"]');
+                        if (open) { open.focus(); }
+                    }
                     try { window.sessionStorage.setItem(TAB_KEY, id); } catch (e) { /* not available */ }
                     // The link of a new invitation is shown once: it does not follow the administrator from tab to tab.
                     $('ucInvResult').hidden = true;
@@ -578,6 +601,16 @@
                         var key = status.proxyGuardTripped ? (REASONS[status.reason] || 'proxyUnknown') : null;
                         show('ucBanner', key ? s[key] : '');
                         show('ucMailBanner', status.canSendEmail ? '' : s.mailOff);
+                        // E-mail sign-in: unavailable when Jellyfin's sign-in action was not recognised (the stored value is left as it is).
+                        var emailLoginOk = status.emailLoginAvailable !== false;
+                        page.querySelector('[data-f="emailLogin"]').disabled = !emailLoginOk;
+                        show('ucEmailLoginUnavailable', emailLoginOk ? '' : s.emailLoginUnavailable);
+                        show('ucEmailLoginShared', status.sharedEmailCount > 0 ? fmt(s.emailLoginShared || '{0}', status.sharedEmailCount) : '');
+                        // The accounts concerned: user names (not trusted, written as text), one group per address.
+                        var groups = status.sharedEmailCount > 0 && Array.isArray(status.sharedEmailAccounts) ? status.sharedEmailAccounts.filter(Array.isArray) : [];
+                        var names = groups.map(function (g) { return g.join(', '); }).join(' ; ');
+                        if (groups.length && status.sharedEmailCount > groups.length) { names += ' ; \u2026'; }
+                        show('ucEmailLoginSharedAccounts', groups.length ? fmt(s.emailLoginSharedAccounts || '{0}', names) : '');
                     });
                 }
 
@@ -659,6 +692,18 @@
                     });
                 });
 
+                $('ucClearSmtpPassword').addEventListener('click', function () {
+                    if (!loaded || !window.confirm(s.smtpPasswordClearConfirm)) { return; }
+                    show('ucError-smtp', '');
+                    show('ucSaved-smtp', '');
+                    busy(api('POST', 'MailConcierge/Admin/Config', { clearSmtpPassword: true }), function (t) { show('ucError-smtp', t, true); }).then(function (r) {
+                        if (r) {
+                            show('ucSaved-smtp', s.saved, false);
+                            return load('smtp');
+                        }
+                    });
+                });
+
                 page.addEventListener('input', updateWarnings);
                 page.addEventListener('change', updateWarnings);
 
@@ -690,8 +735,9 @@
                             var cell = document.createElement('td');
                             var box = document.createElement('input');
                             box.type = 'checkbox';
-                            box.checked = true;
+                            box.checked = false;
                             box.value = row.userId;
+                            box.setAttribute('data-email', row.email);
                             cell.appendChild(box);
                             tr.appendChild(cell);
                             [row.username, row.email, row.currentEmail || ''].forEach(function (text) {
@@ -705,10 +751,10 @@
                 });
 
                 $('ucImport').addEventListener('click', function () {
-                    var ids = Array.prototype.map.call($('ucImportRows').querySelectorAll('input:checked'), function (i) { return i.value; });
-                    busy(api('POST', 'MailConcierge/Seerr/Import', { userIds: ids }), function (t) { show('ucSeerrResult', t, true); }).then(function (r) {
+                    var items = Array.prototype.map.call($('ucImportRows').querySelectorAll('input:checked'), function (i) { return { userId: i.value, email: i.getAttribute('data-email') }; });
+                    busy(api('POST', 'MailConcierge/Seerr/Import', { items: items }), function (t) { show('ucSeerrResult', t, true); }).then(function (r) {
                         if (r) {
-                            show('ucSeerrResult', fmt(s.imported, r.imported), false);
+                            show('ucSeerrResult', fmt(s.imported, r.imported) + (r.changed > 0 ? ' ' + fmt(s.importChanged, r.changed) : ''), false);
                             $('ucImportBox').hidden = true;
                         }
                     });
@@ -734,7 +780,7 @@
                         return Promise.resolve(fallback);
                     }
                     return response.json().then(function (json) {
-                        var map = { invalid_username: s['inv.errUsername'], invalid_email: s['inv.errEmail'], invalid_library: s['inv.errLibrary'], no_public_url: s['inv.errPublicUrl'] };
+                        var map = { invalid_username: s['inv.errUsername'], invalid_email: s['inv.errEmail'], invalid_library: s['inv.errLibrary'], no_public_url: s['inv.errPublicUrl'], service_closed: s['inv.errServiceClosed'] };
                         return (json && map[json.code]) || fallback;
                     }, function () { return fallback; });
                 }
@@ -825,6 +871,25 @@
                     return b;
                 }
 
+                // The icon button that erases an invitation from the history.
+                function invEraseButton(inv) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.setAttribute('is', 'paper-icon-button-light');
+                    b.className = 'paper-icon-button-light';
+                    b.title = s['inv.erase'];
+                    b.setAttribute('aria-label', s['inv.erase']);
+                    var icon = document.createElement('span');
+                    icon.className = 'material-icons delete';
+                    icon.setAttribute('aria-hidden', 'true');
+                    b.appendChild(icon);
+                    b.addEventListener('click', function () {
+                        if (inv.state === 'Pending' && !window.confirm(s['inv.confirmErasePending'])) { return; }
+                        api('DELETE', 'MailConcierge/Invitations/' + inv.id + '?erase=true').then(function () { $('ucInvResult').hidden = true; return loadInvList(); }, function (e) { invErrorOf(e).then(invShowError); });
+                    });
+                    return b;
+                }
+
                 function loadInvList() {
                     return api('GET', 'MailConcierge/Invitations').then(function (items) {
                         var list = $('ucInvList');
@@ -844,7 +909,7 @@
                             if (inv.state === 'Pending' || inv.state === 'Expired') {
                                 row.appendChild(invButton(s['inv.regenerate'], function () {
                                     api('POST', 'MailConcierge/Invitations/' + inv.id + '/Regenerate').then(function (result) {
-                                        showInvLink(s['inv.newLink'], result.link);
+                                        showInvLink(invEmailText(result, inv.email, 'inv.newLinkSent', 'inv.newLink', 'inv.newLinkNotSentLimit'), result.link);
                                         return loadInvList();
                                     }, function (e) { invErrorOf(e).then(invShowError); });
                                 }));
@@ -853,9 +918,18 @@
                                     api('DELETE', 'MailConcierge/Invitations/' + inv.id).then(function () { $('ucInvResult').hidden = true; return loadInvList(); }, function (e) { invErrorOf(e).then(invShowError); });
                                 }));
                             }
+                            row.appendChild(invEraseButton(inv));
                             list.appendChild(row);
                         });
                     });
+                }
+
+                // The sentence for the outcome of an invitation e-mail: sent, or the reason it was not.
+                function invEmailText(result, address, sentKey, otherKey, limitKey) {
+                    if (result.emailed) { return s[sentKey].replace('{0}', address); }
+                    if (result.emailStatus === 'limit_reached') { return s[limitKey]; }
+                    if (result.emailStatus === 'queue_full') { return s['inv.notSentQueueFull']; }
+                    return s[otherKey];
                 }
 
                 function loadInvitations() {
@@ -890,7 +964,7 @@
                     }).then(function (result) {
                         Dashboard.hideLoadingMsg();
                         if (email) {
-                            showInvLink(result.emailed ? s['inv.sentTo'].replace('{0}', email) : (result.emailStatus === 'limit_reached' ? s['inv.notSentLimit'] : s['inv.notSent']), result.link);
+                            showInvLink(invEmailText(result, email, 'inv.sentTo', 'inv.notSent', 'inv.notSentLimit'), result.link);
                         } else {
                             showInvLink(s['inv.linkReady'], result.link);
                             copyInvLink();

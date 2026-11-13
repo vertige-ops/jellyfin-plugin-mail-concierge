@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
@@ -13,6 +14,7 @@ using Jellyfin.Plugin.MailConcierge.Localization;
 using Jellyfin.Plugin.MailConcierge.Security;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Users;
 using Microsoft.Extensions.Logging;
 
@@ -34,7 +36,8 @@ public sealed class InvitationService
     /// </summary>
     public const int MaxUsernameChecks = 20;
 
-    private const int DefaultLoginAttemptsBeforeLockout = 3;
+    private const int InvitedLoginAttemptsBeforeLockout = 5;
+    private const int MaxUsernameLength = 64;
 
     private const int MaxDays = 365;
     private const int FailuresBeforeBlock = 10;
@@ -44,17 +47,19 @@ public sealed class InvitationService
     private static readonly TimeSpan FailWindow = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan FailBlock = TimeSpan.FromMinutes(15);
 
-    // The rule of Jellyfin's UserManager (its check is internal): unicode word characters, space, - ' . _ @ +, no edge space.
-    private static readonly Regex ValidUsername = new(@"^(?!\s)[\w\ \-'._@+]+(?<!\s)\z", RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    // Jellyfin's rule (UserManager's check is internal) is unicode word characters, space, - ' . _ @ +, no edge space; this one is stricter on purpose: no @, so a user name can never look like an e-mail address.
+    private static readonly Regex ValidUsername = new(@"^(?!\s)[\w\ \-'._+]+(?<!\s)\z", RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     private readonly MailConciergeStore _store;
     private readonly TokenService _tokens;
     private readonly RateLimiter _limiter;
     private readonly EmailQueue _queue;
     private readonly IUserManager _users;
+    private readonly ISessionManager _sessions;
     private readonly EmailService _email;
     private readonly IServerApplicationHost _host;
     private readonly Func<PluginConfiguration> _config;
+    private readonly ServiceGate _gate;
     private readonly TimeProvider _time;
     private readonly ILogger<InvitationService> _logger;
     private readonly AvatarSaver? _avatars;
@@ -67,9 +72,11 @@ public sealed class InvitationService
     /// <param name="limiter">The rate limiter.</param>
     /// <param name="queue">The e-mail queue.</param>
     /// <param name="users">The user manager.</param>
+    /// <param name="sessions">The session manager (revokes the tokens of a new account).</param>
     /// <param name="email">The e-mail service.</param>
     /// <param name="host">The application host (server name).</param>
     /// <param name="config">Accessor of the current configuration.</param>
+    /// <param name="gate">Tells whether the service is open (enabled, proxy guard quiet).</param>
     /// <param name="time">The time source.</param>
     /// <param name="logger">The logger.</param>
     /// <param name="avatars">Saves the optional profile picture.</param>
@@ -79,9 +86,11 @@ public sealed class InvitationService
         RateLimiter limiter,
         EmailQueue queue,
         IUserManager users,
+        ISessionManager sessions,
         EmailService email,
         IServerApplicationHost host,
         Func<PluginConfiguration> config,
+        ServiceGate gate,
         TimeProvider time,
         ILogger<InvitationService> logger,
         AvatarSaver? avatars = null)
@@ -91,9 +100,11 @@ public sealed class InvitationService
         _limiter = limiter;
         _queue = queue;
         _users = users;
+        _sessions = sessions;
         _email = email;
         _host = host;
         _config = config;
+        _gate = gate;
         _time = time;
         _logger = logger;
         _avatars = avatars;
@@ -105,7 +116,32 @@ public sealed class InvitationService
     /// <param name="username">The candidate name.</param>
     /// <returns>True when valid.</returns>
     public static bool IsValidUsername(string? username)
-        => !string.IsNullOrWhiteSpace(username) && ValidUsername.IsMatch(username) && username is not ("." or "..");
+        => !string.IsNullOrWhiteSpace(username) && username.Length <= MaxUsernameLength && ValidUsername.IsMatch(username) && username is not ("." or "..") && !HasInvisibleCharacter(username);
+
+    /// <summary>
+    /// Gives a user name its canonical form: trimmed, then in Unicode normalization form C, so that a name typed with combining
+    /// marks and the same name typed with precomposed letters are one name.
+    /// </summary>
+    /// <param name="username">The name as typed.</param>
+    /// <returns>The trimmed, normalized name, or null when none was given.</returns>
+    public static string? NormalizeUsername(string? username)
+    {
+        var trimmed = username?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            return trimmed;
+        }
+
+        try
+        {
+            return trimmed.Normalize(NormalizationForm.FormC);
+        }
+        catch (ArgumentException)
+        {
+            // Not valid Unicode (a lone surrogate): kept as typed, refused by IsValidUsername.
+            return trimmed;
+        }
+    }
 
     /// <summary>
     /// Creates an invitation and sends it when an address is given and e-mail is configured.
@@ -118,10 +154,12 @@ public sealed class InvitationService
     /// <returns>The invitation, the link (which is not stored), and what happened to the e-mail, or null when none was to be sent.</returns>
     /// <exception cref="ArgumentException">The user name, the address or a library id is not valid.</exception>
     /// <exception cref="InvalidOperationException">The public URL is not configured, so no usable link can be made.</exception>
+    /// <exception cref="ServiceClosedException">The service is closed: nothing is created or sent.</exception>
     public async Task<(Invitation inv, string link, EnqueueResult? email)> CreateAsync(string proposedUsername, string? email, string[] libraryIds, int? days, string language)
     {
+        RequireOpen();
         ArgumentNullException.ThrowIfNull(libraryIds);
-        var username = proposedUsername?.Trim();
+        var username = NormalizeUsername(proposedUsername);
         if (!IsValidUsername(username))
         {
             throw new ArgumentException("The user name is not valid.", nameof(proposedUsername));
@@ -156,19 +194,7 @@ public sealed class InvitationService
         }).ConfigureAwait(false);
 
         var link = LinkOf(cfg, token);
-        EnqueueResult? emailResult = null;
-        if (address is not null)
-        {
-            var values = new Dictionary<string, string>
-            {
-                ["username"] = inv.ProposedUsername,
-                ["serverName"] = ServerName(),
-                ["link"] = link,
-                ["expires"] = FormatDate(inv.ExpiresAt, lang),
-            };
-            var (subject, html, text) = EmailTemplates.Render("invitation", lang, values, cfg.TemplateOverrides);
-            emailResult = _queue.Enqueue(new EmailMessage(address, subject, html, text, "invitation", null));
-        }
+        var emailResult = SendInvitationEmail(inv, link, cfg);
 
         return (inv, link, emailResult);
     }
@@ -213,19 +239,35 @@ public sealed class InvitationService
     });
 
     /// <summary>
-    /// Gives a pending or expired invitation a new link: the old link stops working and the validity restarts.
+    /// Erases an invitation from the history, whatever its state: its link stops working and its record is gone. The account created
+    /// from an accepted invitation is not touched. An unknown invitation is ignored.
     /// </summary>
     /// <param name="id">The invitation id.</param>
-    /// <returns>The new link, which is not stored.</returns>
+    /// <returns>A task that completes when the invitation was erased.</returns>
+    public Task EraseAsync(Guid id) => _store.WriteAsync(d =>
+    {
+        // One write: the link and the record go together, so a claim or a roll-back that runs next finds neither.
+        d.Tokens.RemoveAll(t => t.Purpose == TokenPurpose.Invitation && t.InvitationId == id);
+        d.Invitations.RemoveAll(i => i.Id == id);
+    });
+
+    /// <summary>
+    /// Gives a pending or expired invitation a new link: the old link stops working and the validity restarts.
+    /// When the invitation has an address, the invitation e-mail is sent again with the new link.
+    /// </summary>
+    /// <param name="id">The invitation id.</param>
+    /// <returns>The new link, which is not stored, and what happened to the e-mail, or null when the invitation has no address.</returns>
     /// <exception cref="KeyNotFoundException">There is no such invitation that can still be used.</exception>
     /// <exception cref="InvalidOperationException">The public URL is not configured.</exception>
-    public async Task<string> RegenerateAsync(Guid id)
+    /// <exception cref="ServiceClosedException">The service is closed: the old link is kept.</exception>
+    public async Task<(string link, EnqueueResult? email)> RegenerateAsync(Guid id)
     {
+        RequireOpen();
         var cfg = _config();
         RequirePublicUrl(cfg);
         var now = Now();
         var token = _tokens.NewToken();
-        var found = false;
+        Invitation? renewed = null;
         await _store.WriteAsync(d =>
         {
             d.Tokens.RemoveAll(t => t.ExpiresAt <= now || (t.Purpose == TokenPurpose.Invitation && t.InvitationId == id));
@@ -238,11 +280,35 @@ public sealed class InvitationService
             var current = d.Invitations[index];
             var span = current.ExpiresAt - current.CreatedAt;
             var expires = now + (span < TimeSpan.FromDays(1) ? TimeSpan.FromDays(1) : span);
-            d.Invitations[index] = current with { State = InvitationState.Pending, ExpiresAt = expires };
+            renewed = current with { State = InvitationState.Pending, ExpiresAt = expires };
+            d.Invitations[index] = renewed;
             d.Tokens.Add(new TokenRecord(_tokens.Hash(token), TokenPurpose.Invitation, null, id, null, expires, 0));
-            found = true;
         }).ConfigureAwait(false);
-        return found ? LinkOf(cfg, token) : throw new KeyNotFoundException("No usable invitation has this id.");
+        if (renewed is null)
+        {
+            throw new KeyNotFoundException("No usable invitation has this id.");
+        }
+
+        var link = LinkOf(cfg, token);
+        return (link, SendInvitationEmail(renewed, link, cfg));
+    }
+
+    private EnqueueResult? SendInvitationEmail(Invitation inv, string link, PluginConfiguration cfg)
+    {
+        if (inv.Email is null)
+        {
+            return null;
+        }
+
+        var values = new Dictionary<string, string>
+        {
+            ["username"] = inv.ProposedUsername,
+            ["serverName"] = ServerName(),
+            ["link"] = link,
+            ["expires"] = FormatDate(inv.ExpiresAt, inv.Language),
+        };
+        var (subject, html, text) = EmailTemplates.Render("invitation", inv.Language, values, cfg.TemplateOverrides);
+        return _queue.Enqueue(new EmailMessage(inv.Email, subject, html, text, "invitation", null));
     }
 
     /// <summary>
@@ -250,9 +316,14 @@ public sealed class InvitationService
     /// </summary>
     /// <param name="token">The token of the link.</param>
     /// <param name="clientIpKey">The client IP key, fed to the token-failure limiter.</param>
-    /// <returns>The proposed user name and address, or null when the link is not valid.</returns>
+    /// <returns>The proposed user name and address, or null when the link is not valid or the service is closed.</returns>
     public async Task<InvitationView?> PeekAsync(string token, string clientIpKey = "unknown")
     {
+        if (!_gate.IsOpen)
+        {
+            return null;
+        }
+
         var inv = await FindAsync(token, clientIpKey).ConfigureAwait(false);
         return inv is null ? null : new InvitationView(inv.ProposedUsername, inv.Email, inv.Language);
     }
@@ -263,10 +334,10 @@ public sealed class InvitationService
     /// <param name="token">The token of the link.</param>
     /// <param name="username">The candidate name.</param>
     /// <param name="clientIpKey">The client IP key, fed to the token-failure limiter.</param>
-    /// <returns>True when the link is valid, not limited, and the name is valid and free.</returns>
+    /// <returns>True when the service is open, the link is valid, not limited, and the name is valid and free.</returns>
     public async Task<bool> IsUsernameAvailableAsync(string token, string username, string clientIpKey = "unknown")
     {
-        if (await FindAsync(token, clientIpKey).ConfigureAwait(false) is null)
+        if (!_gate.IsOpen || await FindAsync(token, clientIpKey).ConfigureAwait(false) is null)
         {
             return false;
         }
@@ -276,7 +347,7 @@ public sealed class InvitationService
             return false;
         }
 
-        var name = username?.Trim();
+        var name = NormalizeUsername(username);
         return IsValidUsername(name) && _users.GetUserByName(name!) is null;
     }
 
@@ -291,15 +362,15 @@ public sealed class InvitationService
     /// <param name="language">The language of the e-mails; anything but fr and en means the invitation language.</param>
     /// <param name="clientIpKey">The client IP key, fed to the token-failure limiter.</param>
     /// <param name="avatarBase64">The optional profile picture, base64 without prefix; invalid means none; it is applied last and its failure never fails the acceptance.</param>
-    /// <returns>The outcome. Nothing is consumed unless it is <see cref="AcceptResult.Ok"/>, or an exception is thrown after the changes were undone.</returns>
+    /// <returns>The outcome, <see cref="AcceptResult.InvalidToken"/> while the service is closed. Nothing is consumed unless it is <see cref="AcceptResult.Ok"/>, or an exception is thrown after the changes were undone.</returns>
     public async Task<AcceptResult> AcceptAsync(string token, string username, string email, string password, string language, string clientIpKey = "unknown", string? avatarBase64 = null)
     {
-        if (await FindAsync(token, clientIpKey).ConfigureAwait(false) is not { } inv)
+        if (!_gate.IsOpen || await FindAsync(token, clientIpKey).ConfigureAwait(false) is not { } inv)
         {
             return AcceptResult.InvalidToken;
         }
 
-        var name = username?.Trim();
+        var name = NormalizeUsername(username);
         if (!IsValidUsername(name))
         {
             return AcceptResult.InvalidUsername;
@@ -347,14 +418,20 @@ public sealed class InvitationService
             var policy = _users.GetUserDto(user)?.Policy ?? new UserPolicy();
             policy.IsAdministrator = false;
 
-            // Disabled until the password is set: a new account has an empty password, which must never let anyone sign in.
+            // Disabled until the password is set: a new account has an empty password, which Jellyfin accepts at sign-in. Until this call
+            // takes effect a sign-in is possible, for a few milliseconds, to someone who guesses the name; the tokens it could open are
+            // revoked below, after the password is set and before the account is enabled.
             policy.IsDisabled = true;
-            policy.LoginAttemptsBeforeLockout = DefaultLoginAttemptsBeforeLockout;
+            policy.LoginAttemptsBeforeLockout = InvitedLoginAttemptsBeforeLockout;
+            policy.EnableLiveTvManagement = false;
             policy.EnableAllFolders = false;
             policy.EnabledFolders = inv.LibraryIds.Select(Guid.Parse).ToArray();
             policy.PasswordResetProviderId = MailConciergePasswordResetProvider.Id;
             await _users.UpdatePolicyAsync(user.Id, policy).ConfigureAwait(false);
             await _users.ChangePassword(user.Id, password).ConfigureAwait(false);
+
+            // A session opened in the short moment before the account was disabled (the new account has no password until now) must not survive.
+            await _sessions.RevokeUserTokens(user.Id, null).ConfigureAwait(false);
             policy.IsDisabled = false;
             await _users.UpdatePolicyAsync(user.Id, policy).ConfigureAwait(false);
 
@@ -385,6 +462,32 @@ public sealed class InvitationService
         return AcceptResult.Ok;
     }
 
+    // Characters that make two names look alike or hide in a name: controls, format characters (bidi, zero width), surrogates left
+    // alone, private use, unassigned, line and paragraph separators, variation selectors, the combining grapheme joiner and the Hangul fillers.
+    private static bool HasInvisibleCharacter(string name)
+    {
+        for (var i = 0; i < name.Length; i++)
+        {
+            var width = char.IsHighSurrogate(name[i]) && i + 1 < name.Length && char.IsLowSurrogate(name[i + 1]) ? 2 : 1;
+            var category = CharUnicodeInfo.GetUnicodeCategory(name, i);
+            if (category is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.Surrogate or UnicodeCategory.PrivateUse
+                or UnicodeCategory.OtherNotAssigned or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator)
+            {
+                return true;
+            }
+
+            var codePoint = width == 2 ? char.ConvertToUtf32(name[i], name[i + 1]) : name[i];
+            if (codePoint is (>= 0xFE00 and <= 0xFE0F) or (>= 0xE0100 and <= 0xE01EF) or 0x034F or 0x115F or 0x1160 or 0x3164 or 0xFFA0)
+            {
+                return true;
+            }
+
+            i += width - 1;
+        }
+
+        return false;
+    }
+
     private async Task ApplyAvatarAsync(Guid userId, string? avatarBase64)
     {
         if (_avatars is null || string.IsNullOrEmpty(avatarBase64) || !AvatarImage.TryDecode(avatarBase64, out var bytes, out var mimeType))
@@ -403,6 +506,14 @@ public sealed class InvitationService
         {
             // Never the content, never the token: the registration succeeded anyway.
             _logger.LogWarning("The profile picture of user {UserId} could not be saved ({ErrorType})", userId, ex.GetType().Name);
+        }
+    }
+
+    private void RequireOpen()
+    {
+        if (!_gate.IsOpen)
+        {
+            throw new ServiceClosedException();
         }
     }
 

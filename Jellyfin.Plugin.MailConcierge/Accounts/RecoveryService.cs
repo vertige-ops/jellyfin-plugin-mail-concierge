@@ -40,8 +40,9 @@ public sealed class RecoveryService
     private readonly TokenService _tokens;
     private readonly RateLimiter _limiter;
     private readonly EmailQueue _queue;
-    private readonly ProxyGuard _guard;
+    private readonly ServiceGate _gate;
     private readonly IUserManager _users;
+    private readonly EmailLoginResolver _resolver;
     private readonly SessionCloser _sessionCloser;
     private readonly IServerApplicationHost _host;
     private readonly Func<PluginConfiguration> _config;
@@ -56,8 +57,9 @@ public sealed class RecoveryService
     /// <param name="tokens">The token service.</param>
     /// <param name="limiter">The rate limiter.</param>
     /// <param name="queue">The e-mail queue.</param>
-    /// <param name="guard">The reverse-proxy guard.</param>
+    /// <param name="gate">Tells whether the service is open (enabled, proxy guard quiet).</param>
     /// <param name="users">The user manager.</param>
+    /// <param name="resolver">Finds the account of a typed confirmed e-mail address.</param>
     /// <param name="sessionCloser">The session closer.</param>
     /// <param name="host">The application host (server name).</param>
     /// <param name="config">Accessor of the current configuration.</param>
@@ -69,8 +71,9 @@ public sealed class RecoveryService
         TokenService tokens,
         RateLimiter limiter,
         EmailQueue queue,
-        ProxyGuard guard,
+        ServiceGate gate,
         IUserManager users,
+        EmailLoginResolver resolver,
         SessionCloser sessionCloser,
         IServerApplicationHost host,
         Func<PluginConfiguration> config,
@@ -83,8 +86,9 @@ public sealed class RecoveryService
         _tokens = tokens;
         _limiter = limiter;
         _queue = queue;
-        _guard = guard;
+        _gate = gate;
         _users = users;
+        _resolver = resolver;
         _sessionCloser = sessionCloser;
         _host = host;
         _config = config;
@@ -103,7 +107,7 @@ public sealed class RecoveryService
     /// Handles a forgot-password request. Never throws and never reveals anything: when the request is refused,
     /// rate-limited or concerns an unknown or ineligible account, nothing happens.
     /// </summary>
-    /// <param name="enteredUsername">The user name typed by the visitor.</param>
+    /// <param name="enteredUsername">The user name, or the confirmed e-mail address, typed by the visitor.</param>
     /// <param name="clientIpKey">The client IP key.</param>
     /// <returns>A task that completes when the request was handled.</returns>
     public async Task RequestAsync(string enteredUsername, string clientIpKey)
@@ -111,7 +115,7 @@ public sealed class RecoveryService
         try
         {
             var cfg = _config();
-            if (!cfg.Enabled || _guard.Tripped || !cfg.CanSendEmail())
+            if (!_gate.IsOpen || !cfg.CanSendEmail())
             {
                 _logger.LogDebug("Forgot-password request ignored: Mail Concierge is disabled, the proxy guard is tripped or e-mail is not configured");
                 return;
@@ -123,7 +127,7 @@ public sealed class RecoveryService
                 return;
             }
 
-            var user = string.IsNullOrWhiteSpace(enteredUsername) ? null : _users.GetUserByName(enteredUsername.Trim());
+            var user = await FindAccountAsync(enteredUsername).ConfigureAwait(false);
             if (user is null)
             {
                 _logger.LogDebug("Forgot-password request ignored: unknown user");
@@ -147,12 +151,26 @@ public sealed class RecoveryService
             var expires = now.AddMinutes(cfg.PinMinutes);
             var pin = _tokens.NewPin();
             var linkToken = _tokens.NewToken();
+            string? recipient = null;
             await _store.WriteAsync(d =>
             {
                 d.Tokens.RemoveAll(t => t.ExpiresAt <= now || (t.UserId == user.Id && t.Purpose is TokenPurpose.ResetPin or TokenPurpose.ResetLink));
+                var current = d.Emails.FirstOrDefault(e => e.UserId == user.Id);
+                if (!AccountPolicy.IsEligible(user, current, cfg))
+                {
+                    return;
+                }
+
                 d.Tokens.Add(new TokenRecord(_tokens.Hash(pin), TokenPurpose.ResetPin, user.Id, null, null, expires, 0));
                 d.Tokens.Add(new TokenRecord(_tokens.Hash(linkToken), TokenPurpose.ResetLink, user.Id, null, null, expires, 0));
+                recipient = current!.Email;
             }).ConfigureAwait(false);
+
+            if (recipient is null)
+            {
+                _logger.LogDebug("Forgot-password request ignored: user {UserId} is not eligible any more", user.Id);
+                return;
+            }
 
             var language = LanguageOf(cfg);
             var values = new Dictionary<string, string>
@@ -164,7 +182,7 @@ public sealed class RecoveryService
                 ["expires"] = Languages.FormatDateTime(expires, _time.LocalTimeZone, language),
             };
             var (subject, html, text) = EmailTemplates.Render("recovery", language, values, cfg.TemplateOverrides);
-            _queue.Enqueue(new EmailMessage(email!.Email!, subject, html, text, "recovery", user.Id));
+            _queue.Enqueue(new EmailMessage(recipient, subject, html, text, "recovery", user.Id));
         }
         catch (Exception ex)
         {
@@ -175,7 +193,7 @@ public sealed class RecoveryService
     /// <summary>
     /// Exchanges the e-mailed PIN for a reset-session token.
     /// </summary>
-    /// <param name="username">The user name the PIN belongs to.</param>
+    /// <param name="username">The user name the PIN belongs to, or the confirmed e-mail address of that account.</param>
     /// <param name="pin">The PIN.</param>
     /// <param name="clientIpKey">The client IP key.</param>
     /// <returns>A reset-session token, or null when the PIN is wrong, expired or exhausted.</returns>
@@ -185,12 +203,12 @@ public sealed class RecoveryService
         try
         {
             var cfg = _config();
-            if (!cfg.Enabled || _guard.Tripped || _limiter.IsBlocked(RateLimitBuckets.PinFailIp, clientIpKey))
+            if (!_gate.IsOpen || _limiter.IsBlocked(RateLimitBuckets.PinFailIp, clientIpKey))
             {
                 return null;
             }
 
-            var user = string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(pin) ? null : _users.GetUserByName(username.Trim());
+            var user = string.IsNullOrWhiteSpace(pin) ? null : await FindAccountAsync(username).ConfigureAwait(false);
             string? session = null;
             if (user is not null)
             {
@@ -260,7 +278,7 @@ public sealed class RecoveryService
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(linkToken) || !_config().Enabled || _guard.Tripped)
+            if (string.IsNullOrWhiteSpace(linkToken) || !_gate.IsOpen)
             {
                 return false;
             }
@@ -290,7 +308,7 @@ public sealed class RecoveryService
     {
         try
         {
-            if (!_config().Enabled || _guard.Tripped || _limiter.IsBlocked(RateLimitBuckets.TokenFailIp, clientIpKey))
+            if (!_gate.IsOpen || _limiter.IsBlocked(RateLimitBuckets.TokenFailIp, clientIpKey))
             {
                 return null;
             }
@@ -343,7 +361,7 @@ public sealed class RecoveryService
     {
         try
         {
-            if (!_config().Enabled || _guard.Tripped || !IsAcceptablePassword(newPassword) || string.IsNullOrWhiteSpace(sessionToken)
+            if (!_gate.IsOpen || !IsAcceptablePassword(newPassword) || string.IsNullOrWhiteSpace(sessionToken)
                 || _limiter.IsBlocked(RateLimitBuckets.TokenFailIp, clientIpKey))
             {
                 return false;
@@ -409,6 +427,35 @@ public sealed class RecoveryService
         {
             _logger.LogError(ex, "Password reset completion failed");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Finds the account a visitor means: the account bearing the typed text as its user name, otherwise, for a text with an at sign,
+    /// the account whose confirmed address it is (exactly one account holds it). Whatever fails is logged by type only, since the
+    /// message of an exception may quote what was typed.
+    /// </summary>
+    private async Task<User?> FindAccountAsync(string? typed)
+    {
+        try
+        {
+            var text = typed?.Trim();
+            if (string.IsNullOrEmpty(text))
+            {
+                return null;
+            }
+
+            if (_users.GetUserByName(text) is { } named)
+            {
+                return named;
+            }
+
+            return await _resolver.FindAccountAsync(text).ConfigureAwait(false) is Guid id ? _users.GetUserById(id) : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("Account lookup failed: {ExceptionType}", ex.GetType().Name);
+            return null;
         }
     }
 

@@ -19,10 +19,12 @@ public sealed partial class EmailQueue : BackgroundService
 {
     private const int MaxAttempts = 3;
 
+    private static readonly TimeSpan AttemptLimit = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan BudgetWindow = TimeSpan.FromHours(1);
     private static readonly TimeSpan[] DefaultRetryDelays = { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(25) };
 
-    private readonly Channel<EmailMessage> _channel = Channel.CreateUnbounded<EmailMessage>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly Channel<EmailMessage> _channel;
+    private readonly int _capacity;
     private readonly Func<PluginConfiguration> _config;
     private readonly IEmailTransport _transport;
     private readonly RateLimiter _limiter;
@@ -39,14 +41,18 @@ public sealed partial class EmailQueue : BackgroundService
     /// <param name="logger">The logger.</param>
     /// <param name="time">The time source, used for back-off delays.</param>
     /// <param name="retryDelays">The back-off before each retry; defaults to 1, 5 and 25 seconds.</param>
+    /// <param name="capacity">The number of messages that can wait for the worker; a full queue refuses new messages.</param>
     public EmailQueue(
         Func<PluginConfiguration> config,
         IEmailTransport transport,
         RateLimiter limiter,
         ILogger<EmailQueue> logger,
         TimeProvider time,
-        IReadOnlyList<TimeSpan>? retryDelays = null)
+        IReadOnlyList<TimeSpan>? retryDelays = null,
+        int capacity = 100)
     {
+        _capacity = capacity;
+        _channel = Channel.CreateBounded<EmailMessage>(new BoundedChannelOptions(capacity) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
         _config = config;
         _transport = transport;
         _limiter = limiter;
@@ -57,7 +63,7 @@ public sealed partial class EmailQueue : BackgroundService
 
     /// <summary>
     /// Queues a message. The message is dropped, with a warning in the log, when e-mail is not configured or when the
-    /// hourly budget of its type (recovery, invitation, account) is reached. The budgets are separate, so that
+    /// hourly budget of its type (recovery, invitation, account) is reached, or when the queue is full (checked before the budget is consumed). The budgets are separate, so that
     /// anonymous recovery requests cannot starve the invitations an administrator sends.
     /// </summary>
     /// <param name="m">The message.</param>
@@ -75,7 +81,7 @@ public sealed partial class EmailQueue : BackgroundService
         {
             // Security notices to the previous address never use a shared budget: otherwise someone who filled it could keep the
             // owner from being warned. They are bounded by the per-user limits of the e-mail change form.
-            return _channel.Writer.TryWrite(m) ? EnqueueResult.Queued : EnqueueResult.NotConfigured;
+            return TryQueue(m);
         }
 
         var (bucket, limit, kind) = m.Template switch
@@ -84,13 +90,27 @@ public sealed partial class EmailQueue : BackgroundService
             "recovery" or "password-changed" => (RateLimitBuckets.RecoveryEmail, config.MaxRecoveryEmailsPerHour, "recovery"),
             _ => (RateLimitBuckets.AccountEmail, config.MaxAccountEmailsPerHour, "account"),
         };
+        if (_channel.Reader.Count >= _capacity)
+        {
+            return RefuseFull(m);
+        }
+
         if (!_limiter.TryAcquire(bucket, "global", limit, BudgetWindow))
         {
             _logger.LogWarning("Dropped {Template} e-mail for user {UserId}: the hourly limit for {Kind} e-mails ({Limit}) is reached", m.Template, m.UserId, kind, limit);
             return EnqueueResult.LimitReached;
         }
 
-        return _channel.Writer.TryWrite(m) ? EnqueueResult.Queued : EnqueueResult.NotConfigured;
+        return TryQueue(m);
+    }
+
+    private EnqueueResult TryQueue(EmailMessage m)
+        => _channel.Writer.TryWrite(m) ? EnqueueResult.Queued : RefuseFull(m);
+
+    private EnqueueResult RefuseFull(EmailMessage m)
+    {
+        _logger.LogWarning("Dropped {Template} e-mail for user {UserId}: the sending queue is full", m.Template, m.UserId);
+        return EnqueueResult.QueueFull;
     }
 
     /// <summary>
@@ -148,7 +168,12 @@ public sealed partial class EmailQueue : BackgroundService
         {
             try
             {
-                await _transport.SendAsync(m, ct).ConfigureAwait(false);
+                // One attempt lasts at most AttemptLimit: a server that accepts the connection and then stalls cannot hold the queue.
+                // An attempt cancelled after the server already accepted the message is retried, so it can be delivered twice;
+                // the two messages carry the same token, so this creates no new right.
+                using var limit = new CancellationTokenSource(AttemptLimit, _time);
+                using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct, limit.Token);
+                await _transport.SendAsync(m, attemptCts.Token).WaitAsync(attemptCts.Token).ConfigureAwait(false);
                 _logger.LogInformation("Sent {Template} e-mail to user {UserId}", m.Template, m.UserId);
                 return;
             }

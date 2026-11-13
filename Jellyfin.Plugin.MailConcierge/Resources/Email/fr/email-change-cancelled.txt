@@ -1,11 +1,11 @@
-Subject: Un changement d'e-mail de votre compte {{serverName}} a été annulé
+Subject: Un changement d’e-mail de votre compte {{serverName}} a été annulé
 
 Bonjour {{username}},
 
-Le changement d'adresse e-mail de votre compte sur {{serverName}} vient d'être annulé, avec le lien envoyé à l'ancienne adresse et votre mot de passe. L'ancienne adresse est rétablie, et vous recevez ce message sur l'adresse qu'elle a remplacée.
+Le changement d’adresse e-mail de votre compte sur {{serverName}} vient d’être annulé, avec le lien envoyé à l’ancienne adresse et votre mot de passe. L’ancienne adresse est rétablie, et vous recevez ce message sur l’adresse qu’elle a remplacée.
 
-Si c'est vous, il n'y a rien à faire. Si ce n'est pas vous :
+Si c’est vous, il n’y a rien à faire. Si ce n’est pas vous :
 
 1. Changez votre mot de passe tout de suite, avec « Mot de passe oublié » sur la page de connexion.
-2. Prévenez l'administrateur de {{serverName}}.
-3. Vérifiez que personne d'autre n'a accès à votre boîte e-mail.
+2. Prévenez l’administrateur de {{serverName}}.
+3. Vérifiez que personne d’autre n’a accès à votre boîte e-mail.

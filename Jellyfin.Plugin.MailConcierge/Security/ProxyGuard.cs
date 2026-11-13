@@ -103,7 +103,10 @@ public sealed class ProxyGuard
             return b[0] == 10
                 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)
                 || (b[0] == 192 && b[1] == 168)
-                || (b[0] == 169 && b[1] == 254);
+                || (b[0] == 169 && b[1] == 254)
+
+                // 100.64.0.0/10, the shared address space (carrier-grade NAT, and the range several VPN overlays hand out).
+                || (b[0] == 100 && (b[1] & 0xC0) == 0x40);
         }
 
         return (b[0] & 0xFE) == 0xFC || (b[0] == 0xFE && (b[1] & 0xC0) == 0x80);

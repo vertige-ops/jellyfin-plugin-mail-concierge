@@ -119,7 +119,7 @@ public sealed class PageRenderer
     /// <summary>
     /// Renders a page.
     /// </summary>
-    /// <param name="page">The page name: reset, confirm, cancel, accept or message.</param>
+    /// <param name="page">The page name: reset, confirm, cancel, accept, message or toomany.</param>
     /// <param name="language">The language code.</param>
     /// <param name="model">An object whose public properties are available to the template as placeholders.</param>
     /// <returns>The result carrying the nonce to put in the security headers.</returns>
@@ -150,7 +150,7 @@ public sealed class PageRenderer
             new Dictionary<string, string>
             {
                 ["lang"] = lang,
-                ["title"] = strings.GetValueOrDefault("page." + (page == "message" ? "invalid" : page) + ".title") ?? serverName,
+                ["title"] = strings.GetValueOrDefault("page." + TitleKey(page) + ".title") ?? serverName,
                 ["serverName"] = serverName,
                 ["base"] = basePath,
                 ["nonce"] = nonce,
@@ -164,6 +164,13 @@ public sealed class PageRenderer
             StatusCode = StatusCodes.Status200OK,
         };
     }
+
+    private static string TitleKey(string page) => page switch
+    {
+        "message" => "invalid",
+        "toomany" => "tooMany",
+        _ => page,
+    };
 
     private static (string Code, double Q, int Index) Parse(string part, int index)
     {

@@ -23,6 +23,10 @@ public class PluginTests
         Assert.Equal(ReadGuidFromBuildYaml(), plugin.Id);
     }
 
+    [Fact]
+    public void AssemblyVersion_Is_12_4_0_0()
+        => Assert.Equal(new Version(12, 4, 0, 0), typeof(Plugin).Assembly.GetName().Version);
+
     private static Guid ReadGuidFromBuildYaml()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

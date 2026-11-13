@@ -29,8 +29,8 @@ public class EmailQueueTests
         MaxAccountEmailsPerHour = max,
     };
 
-    private static EmailQueue Create(PluginConfiguration config, IEmailTransport transport, TestLogger logger)
-        => new(() => config, transport, new RateLimiter(TimeProvider.System), logger, TimeProvider.System, new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero });
+    private static EmailQueue Create(PluginConfiguration config, IEmailTransport transport, TestLogger logger, int capacity = 100)
+        => new(() => config, transport, new RateLimiter(TimeProvider.System), logger, TimeProvider.System, new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero }, capacity);
 
     [Fact]
     public void Enqueue_ReturnsFalse_WhenPublicUrlMissing()
@@ -56,6 +56,70 @@ public class EmailQueueTests
         Assert.Contains("recovery", warning, StringComparison.Ordinal);
         Assert.DoesNotContain("bob@example.com", warning, StringComparison.Ordinal);
         Assert.DoesNotContain(Password, warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Enqueue_WhenFull_ReturnsQueueFull()
+    {
+        var queue = Create(Config(), new FakeTransport(), new TestLogger(), capacity: 2);
+        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message));
+        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message));
+
+        Assert.Equal(EnqueueResult.QueueFull, queue.Enqueue(Message));
+    }
+
+    [Fact]
+    public async Task Enqueue_WhenFull_DoesNotConsumeTheBudget()
+    {
+        var transport = new FakeTransport();
+        var queue = Create(Config(3), transport, new TestLogger(), capacity: 2);
+        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message));
+        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message));
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.Equal(EnqueueResult.QueueFull, queue.Enqueue(Message));
+        }
+
+        await queue.StartAsync(CancellationToken.None);
+        try
+        {
+            for (var i = 0; i < 500 && transport.Succeeded < 2; i++)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message));
+            Assert.Equal(EnqueueResult.LimitReached, queue.Enqueue(Message));
+        }
+        finally
+        {
+            await queue.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public void Enqueue_WhenFull_SecurityNotice_ReturnsQueueFull()
+    {
+        var queue = Create(Config(), new FakeTransport(), new TestLogger(), capacity: 2);
+        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message));
+        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message));
+
+        Assert.Equal(EnqueueResult.QueueFull, queue.Enqueue(Message with { Template = "email-changed" }));
+    }
+
+    [Fact]
+    public void Enqueue_WhenFull_LogsWithoutAddress()
+    {
+        var logger = new TestLogger();
+        var queue = Create(Config(), new FakeTransport(), logger, capacity: 1);
+        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message));
+
+        Assert.Equal(EnqueueResult.QueueFull, queue.Enqueue(Message));
+
+        var warning = Assert.Single(logger.Warnings);
+        Assert.Contains("recovery", warning, StringComparison.Ordinal);
+        Assert.Contains(Message.UserId!.Value.ToString(), warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("bob@example.com", warning, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -202,6 +266,115 @@ public class EmailQueueTests
         var config = Config();
         config.SmtpHost = string.Empty;
         Assert.NotNull(await Create(config, new FakeTransport(), new TestLogger()).SendTestAsync("bob@example.com"));
+    }
+
+    [Fact]
+    public async Task EmailQueue_AttemptThatNeverCompletes_EndsAtTwoMinutes_AndTheNextMessageIsDelivered()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
+        var transport = new HangingTransport("slow@example.com");
+        var logger = new TestLogger();
+        var queue = new EmailQueue(() => Config(), transport, new RateLimiter(time), logger, time, new[] { TimeSpan.Zero }, 100);
+        await queue.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message with { To = "slow@example.com" }));
+            Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message with { To = "ok@example.com" }));
+            await transport.WaitForCallsAsync(1);
+
+            time.Advance(TimeSpan.FromSeconds(119));
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+            Assert.Equal(1, transport.Calls);
+            Assert.DoesNotContain(logger.Lines, l => l.Contains("Failed to send", StringComparison.Ordinal));
+
+            time.Advance(TimeSpan.FromSeconds(1));
+            await logger.WaitForAsync("Failed to send recovery e-mail to user 11111111-1111-1111-1111-111111111111 (attempt 1 of 3)");
+            await transport.WaitForCallsAsync(2);
+            time.Advance(TimeSpan.FromMinutes(2));
+            await transport.WaitForCallsAsync(3);
+            time.Advance(TimeSpan.FromMinutes(2));
+            await logger.WaitForAsync("after 3 attempts, dropped");
+            await transport.WaitForDeliveredAsync("ok@example.com");
+        }
+        finally
+        {
+            await queue.StopAsync(CancellationToken.None);
+        }
+
+        Assert.All(logger.Lines, l => Assert.DoesNotContain("example.com", l, StringComparison.Ordinal));
+        Assert.All(logger.Lines, l => Assert.DoesNotContain(Password, l, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EmailQueue_ShutdownDuringAHangingAttempt_StopsAtOnce()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
+        var transport = new HangingTransport("slow@example.com");
+        var queue = new EmailQueue(() => Config(), transport, new RateLimiter(time), new TestLogger(), time, new[] { TimeSpan.Zero }, 100);
+        await queue.StartAsync(CancellationToken.None);
+        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message with { To = "slow@example.com" }));
+        await transport.WaitForCallsAsync(1);
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        await queue.StopAsync(CancellationToken.None);
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), "Shutdown took " + watch.ElapsedMilliseconds + " ms.");
+        Assert.Equal(1, transport.Calls);
+    }
+
+    private sealed class HangingTransport(string hangingAddress) : IEmailTransport
+    {
+        private readonly object _lock = new();
+        private readonly List<string> _delivered = new();
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public Task SendAsync(EmailMessage m, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _calls);
+            if (m.To == hangingAddress)
+            {
+                return Task.Delay(Timeout.Infinite, ct);
+            }
+
+            lock (_lock)
+            {
+                _delivered.Add(m.To);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public async Task WaitForCallsAsync(int count)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (Calls < count && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            Assert.True(Calls >= count, $"expected {count} calls, saw {Calls}");
+        }
+
+        public async Task WaitForDeliveredAsync(string to)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (DateTime.UtcNow < deadline)
+            {
+                lock (_lock)
+                {
+                    if (_delivered.Contains(to))
+                    {
+                        return;
+                    }
+                }
+
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            Assert.Fail("The message was not delivered.");
+        }
     }
 
     private sealed class FakeTransport : IEmailTransport

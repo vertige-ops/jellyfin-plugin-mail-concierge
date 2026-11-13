@@ -13,4 +13,7 @@ public enum EnqueueResult
 
     /// <summary>The message was dropped: the hourly budget of its type is exhausted.</summary>
     LimitReached,
+
+    /// <summary>The message was dropped: the sending queue is full (the SMTP server is probably not answering).</summary>
+    QueueFull,
 }

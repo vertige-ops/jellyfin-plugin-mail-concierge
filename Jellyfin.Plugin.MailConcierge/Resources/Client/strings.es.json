@@ -20,6 +20,8 @@
   "profile.error.rateLimited": "Demasiados intentos. Inténtelo de nuevo más tarde.",
   "profile.error.passwordLocked": "Demasiadas contraseñas incorrectas. Por seguridad, la contraseña no se comprobará durante una hora. Si su cuenta está bloqueada, pida al administrador que la desbloquee.",
   "profile.error.unavailable": "El envío de correos no está configurado en este servidor. Póngase en contacto con el administrador.",
-  "forgot.next": "En la página siguiente, escriba su nombre de usuario y el código recibido.",
-  "pin.username": "Nombre de usuario"
+  "profile.error.closed": "Mail Concierge no está disponible actualmente en este servidor. Póngase en contacto con el administrador.",
+  "forgot.next": "En la página siguiente, escriba su nombre de usuario o su dirección de correo y el código recibido.",
+  "pin.username": "Nombre de usuario o dirección de correo",
+  "login.usernameOrEmail": "Nombre de usuario o correo electrónico"
 }

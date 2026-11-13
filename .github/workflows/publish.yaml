@@ -8,16 +8,24 @@ on:
 permissions:
   contents: read
 
+# One publication at a time: a run never works from a manifest that another run is about to change.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
 jobs:
   test:
     name: Verify tag and run tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      RestoreLockedMode: 'true'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Require the tag to point at a commit of main
         env:
@@ -37,6 +45,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Restore NuGet packages from the lock files
+        run: dotnet restore --locked-mode
+
       - name: .NET tests
         run: dotnet test -c Release
 
@@ -46,16 +57,19 @@ jobs:
           node --check ../../Jellyfin.Plugin.MailConcierge/Resources/Client/mailconcierge-client.js
           npm ci && node --test --test-timeout=30000
 
-  publish:
-    name: Build and publish
+  build:
+    name: Build the plugin
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # create the release and push the manifest commit
+      contents: read   # no write access while third-party code (NuGet, PyPI) runs
+    env:
+      RestoreLockedMode: 'true'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
@@ -66,8 +80,8 @@ jobs:
           python-version: '3.12'
 
       - name: Install jprm
-        # Exact version; no hash pinning (pip --require-hashes would also need the dependencies' hashes).
-        run: pip install "jprm==1.1.0"
+        # Exact version and hashes for jprm and every dependency (see jprm-requirements.in).
+        run: pip install --require-hashes -r .github/jprm-requirements.txt
 
       - name: Compute version
         id: version
@@ -78,6 +92,9 @@ jobs:
           # Jellyfin plugin versions have four parts: v12.0.0 and v12.0.0.0 both give 12.0.0.0
           while [ "$(echo "$raw" | tr -cd . | wc -c)" -lt 3 ]; do raw="$raw.0"; done
           echo "version=$raw" >> "$GITHUB_OUTPUT"
+
+      - name: Restore NuGet packages from the lock files
+        run: dotnet restore --locked-mode
 
       - name: Build the plugin zip
         env:
@@ -103,23 +120,13 @@ jobs:
           if [ ! -s release-notes.md ]; then echo "Mail Concierge ${VERSION}" > release-notes.md; fi
           cat release-notes.md
 
-      - name: Create the GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+      - name: Take manifest.json from main
         run: |
-          zip="$(ls artifacts/*.zip)"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$zip" --clobber
-          else
-            gh release create "$TAG" "$zip" --title "Mail Concierge $TAG" --notes-file release-notes.md
-          fi
-
-      - name: Switch to main for the manifest
-        run: |
-          # The zip was built from the tag; only the manifest commit goes on main.
+          # The zip was built from the tag; the manifest is the one of main.
           git fetch origin main
-          git checkout -B main origin/main
+          git show origin/main:manifest.json > manifest.json
+          # Blob id of the manifest the update starts from; publish refuses to run if main has changed it since.
+          git rev-parse origin/main:manifest.json > manifest-base.txt
 
       - name: Update manifest.json
         env:
@@ -132,9 +139,102 @@ jobs:
             --plugin-url "https://github.com/${REPO}/releases/download/${TAG}/${zip}" \
             ./manifest.json "artifacts/${zip}"
 
+      - name: Gather the files to publish
+        run: |
+          mkdir release
+          cp artifacts/*.zip manifest.json release-notes.md manifest-base.txt release/
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-files
+          path: release/
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the release and push the manifest commit
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          persist-credentials: false   # the token is given to the two steps that need it, never kept in the repository configuration
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-files
+          path: release
+
+      - name: Refuse a stale manifest
+        run: |
+          # manifest-base.txt is only read here: it is never attached to the release nor committed.
+          base="$(cat release/manifest-base.txt)"
+          current="$(git rev-parse HEAD:manifest.json)"
+          if [ "$base" != "$current" ]; then
+            echo "::error::manifest.json changed on main since the build; run the workflow again."
+            exit 1
+          fi
+
+      - name: Refuse a manifest that changes more than this release
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          # The manifest comes from the build job. It must equal the one of main plus exactly one new version entry of this plugin:
+          # this release, with the address of its zip asset and the MD5 of the zip downloaded from the build. Nothing is created before this passes.
+          if [ "$(ls release/*.zip | wc -l)" -ne 1 ]; then
+            echo "::error::Expected exactly one zip in the build artifact."
+            exit 1
+          fi
+          zip="$(ls release/*.zip)"
+          raw="${TAG#v}"
+          while [ "$(echo "$raw" | tr -cd . | wc -c)" -lt 3 ]; do raw="$raw.0"; done
+          guid="$(sed -n 's/^guid: "\(.*\)"/\1/p' build.yaml)"
+          url="https://github.com/${REPO}/releases/download/${TAG}/$(basename "$zip")"
+          sum="$(md5sum "$zip" | cut -d' ' -f1)"
+          current="$(mktemp)"
+          git show HEAD:manifest.json > "$current"
+          if ! jq -e --arg guid "$guid" --arg version "$raw" --arg url "$url" --arg sum "$sum" --slurpfile old "$current" '
+              def mine: map(select(.guid == $guid));
+              def others: map(select(.guid != $guid));
+              . as $new
+              | $old[0] as $old
+              | ($new | type) == "array" and ($old | type) == "array"
+                and ($new | others) == ($old | others)
+                and ($old | mine | length) == 1 and ($new | mine | length) == 1
+                and ($new | mine | .[0] | del(.versions)) == ($old | mine | .[0] | del(.versions))
+                and ($new | mine | .[0].versions | map(select(.version != $version))) == ($old | mine | .[0].versions)
+                and ($new | mine | .[0].versions | map(select(.version == $version)) | length) == 1
+                and ($new | mine | .[0].versions | map(select(.version == $version)) | .[0] | .sourceUrl == $url and .checksum == $sum)
+            ' release/manifest.json > /dev/null; then
+            echo "::error::manifest.json from the build is not the manifest of main plus one entry for ${raw} (zip address and MD5 checksum as downloaded); refusing to publish."
+            exit 1
+          fi
+
+      - name: Refuse to replace an existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "::error::Release $TAG already exists; published versions are never replaced."; exit 1; fi
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          zip="$(ls release/*.zip)"
+          gh release create "$TAG" "$zip" --title "Mail Concierge $TAG" --notes-file release/release-notes.md
+
+      - name: Update manifest.json on main
+        run: cp release/manifest.json manifest.json
+
       - name: Commit manifest.json to main
         env:
           TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -143,5 +243,8 @@ jobs:
             echo "manifest.json unchanged"
           else
             git commit -m "chore: update manifest for ${TAG}"
-            git push origin HEAD:main
+            # The token authenticates this one command, through the environment: it is not in a URL, not in a file of the repository and not in the log.
+            header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+            echo "::add-mask::${header}"
+            GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="$header" git push origin HEAD:main
           fi

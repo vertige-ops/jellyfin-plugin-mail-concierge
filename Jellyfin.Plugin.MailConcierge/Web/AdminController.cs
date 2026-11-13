@@ -33,6 +33,8 @@ public sealed class AdminController : ControllerBase
     private const int MaxTemplateChars = 65536;
     private const int MaxTextChars = 512;
     private const string SubjectPrefix = "Subject: ";
+    private const int MaxSharedEntries = 20;
+    private const int MaxSharedNames = 10;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private static readonly string[] Extensions = { "html", "txt" };
@@ -40,6 +42,9 @@ public sealed class AdminController : ControllerBase
     private readonly IUserManager _users;
     private readonly EmailQueue _queue;
     private readonly ProxyGuard _guard;
+    private readonly ServiceGate _gate;
+    private readonly EmailService _emails;
+    private readonly EmailLoginProbe _probe;
     private readonly Func<PluginConfiguration> _config;
     private readonly Action<PluginConfiguration> _save;
     private readonly ILogger<AdminController> _logger;
@@ -50,14 +55,20 @@ public sealed class AdminController : ControllerBase
     /// <param name="users">The user manager.</param>
     /// <param name="queue">The e-mail queue (test e-mail).</param>
     /// <param name="guard">The proxy guard.</param>
+    /// <param name="gate">Tells whether the service is open (enabled, proxy guard quiet).</param>
+    /// <param name="emails">The e-mail addresses of the users (shared address count).</param>
+    /// <param name="probe">Tells whether e-mail sign-in can work with this Jellyfin version.</param>
     /// <param name="config">Accessor of the current configuration.</param>
     /// <param name="save">Persists the configuration.</param>
     /// <param name="logger">The logger.</param>
-    public AdminController(IUserManager users, EmailQueue queue, ProxyGuard guard, Func<PluginConfiguration> config, Action<PluginConfiguration> save, ILogger<AdminController> logger)
+    public AdminController(IUserManager users, EmailQueue queue, ProxyGuard guard, ServiceGate gate, EmailService emails, EmailLoginProbe probe, Func<PluginConfiguration> config, Action<PluginConfiguration> save, ILogger<AdminController> logger)
     {
         _users = users;
         _queue = queue;
         _guard = guard;
+        _gate = gate;
+        _emails = emails;
+        _probe = probe;
         _config = config;
         _save = save;
         _logger = logger;
@@ -99,6 +110,7 @@ public sealed class AdminController : ControllerBase
                 maxAccountEmailsPerHour = c.MaxAccountEmailsPerHour,
                 maxPinFailures = c.MaxPinFailures,
                 allowAdministrators = c.AllowAdministrators,
+                emailLogin = c.EmailLogin,
                 sessionsOnReset = c.SessionsOnReset.ToString(),
                 sessionInactiveDays = c.SessionInactiveDays,
                 seerrEnabled = c.SeerrEnabled,
@@ -130,6 +142,11 @@ public sealed class AdminController : ControllerBase
         }
 
         var c = _config();
+        if (SecretOfAnotherServer(request, smtpSecurity, c) is { } secretError)
+        {
+            return Code(StatusCodes.Status400BadRequest, secretError);
+        }
+
         c.Enabled = request.Enabled ?? c.Enabled;
         c.NativeForgotPassword = request.NativeForgotPassword ?? c.NativeForgotPassword;
         c.PublicUrl = request.PublicUrl?.Trim() ?? c.PublicUrl;
@@ -137,10 +154,14 @@ public sealed class AdminController : ControllerBase
         c.SmtpHost = request.SmtpHost?.Trim() ?? c.SmtpHost;
         c.SmtpPort = request.SmtpPort ?? c.SmtpPort;
         c.SmtpSecurity = smtpSecurity ?? c.SmtpSecurity;
-        c.SmtpUsername = request.SmtpUsername ?? c.SmtpUsername;
+        c.SmtpUsername = request.SmtpUsername?.Trim() ?? c.SmtpUsername;
         if (!string.IsNullOrEmpty(request.SmtpPassword))
         {
             c.SmtpPassword = request.SmtpPassword;
+        }
+        else if (request.ClearSmtpPassword == true)
+        {
+            c.SmtpPassword = string.Empty;
         }
 
         c.FromAddress = request.FromAddress?.Trim() ?? c.FromAddress;
@@ -156,6 +177,7 @@ public sealed class AdminController : ControllerBase
         c.MaxAccountEmailsPerHour = request.MaxAccountEmailsPerHour ?? c.MaxAccountEmailsPerHour;
         c.MaxPinFailures = request.MaxPinFailures ?? c.MaxPinFailures;
         c.AllowAdministrators = request.AllowAdministrators ?? c.AllowAdministrators;
+        c.EmailLogin = request.EmailLogin ?? c.EmailLogin;
         c.SessionsOnReset = sessions ?? c.SessionsOnReset;
         c.SessionInactiveDays = request.SessionInactiveDays ?? c.SessionInactiveDays;
         c.SeerrEnabled = request.SeerrEnabled ?? c.SeerrEnabled;
@@ -304,10 +326,91 @@ public sealed class AdminController : ControllerBase
     /// <summary>
     /// Gets the state shown in the banner of the page.
     /// </summary>
-    /// <returns><c>{ proxyGuardTripped, reason, canSendEmail }</c>; <c>reason</c> is a code, never a sentence.</returns>
+    /// <returns>
+    /// <c>{ proxyGuardTripped, reason, canSendEmail, serviceOpen, emailLoginAvailable, sharedEmailCount, sharedEmailAccounts }</c>; <c>reason</c> is a code, never a sentence;
+    /// <c>sharedEmailCount</c> is the number of confirmed addresses held by several accounts, 0 when the stored addresses cannot be read;
+    /// <c>sharedEmailAccounts</c> names those accounts, never the addresses: one entry per shared address, each the sorted user names of the accounts
+    /// holding it (an id without an account is left out), the entries sorted by their first name, at most 20 entries of 10 names; empty when the stored addresses cannot be read.
+    /// </returns>
     [HttpGet("Status")]
-    public ActionResult Status()
-        => Json(StatusCodes.Status200OK, new { proxyGuardTripped = _guard.Tripped, reason = _guard.ReasonCode, canSendEmail = _config().CanSendEmail() });
+    public async Task<ActionResult> Status()
+    {
+        var shared = 0;
+        var sharedAccounts = new List<string[]>();
+        try
+        {
+            var records = await _emails.ListAsync().ConfigureAwait(false);
+            var groups = records
+                .Where(e => !string.IsNullOrWhiteSpace(e.Email) && e.ConfirmedAt is not null)
+                .GroupBy(e => e.Email!.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.Select(e => e.UserId).Distinct().ToList())
+                .Where(ids => ids.Count > 1)
+                .ToList();
+            var entries = groups
+                .Select(ids => ids
+                    .Select(id => _users.GetUserById(id)?.Username)
+                    .OfType<string>()
+                    .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(name => name, StringComparer.Ordinal)
+                    .ToArray())
+                .Where(names => names.Length > 0)
+                .OrderBy(names => names[0], StringComparer.OrdinalIgnoreCase)
+                .ThenBy(names => names[0], StringComparer.Ordinal)
+                .Take(MaxSharedEntries)
+                .Select(names => names.Take(MaxSharedNames).ToArray())
+                .ToList();
+            shared = groups.Count;
+            sharedAccounts = entries;
+        }
+        catch (Exception ex)
+        {
+            // The rest of the banner stays readable. The exception itself is not logged: its message could quote the stored data.
+            _logger.LogError("The shared addresses could not be counted: {ExceptionType}", ex.GetType().FullName);
+        }
+
+        return Json(
+            StatusCodes.Status200OK,
+            new
+            {
+                proxyGuardTripped = _guard.Tripped,
+                reason = _guard.ReasonCode,
+                canSendEmail = _config().CanSendEmail(),
+                serviceOpen = _gate.IsOpen,
+                emailLoginAvailable = _probe.IsAvailable,
+                sharedEmailCount = shared,
+                sharedEmailAccounts = sharedAccounts,
+            });
+    }
+
+    // A stored secret is never sent to another server, or without encryption, without being typed again: an empty password or key field
+    // means "keep", which is only safe while the server it belongs to and the way it is sent are the same. Nothing is stored when this returns a code.
+    private static string? SecretOfAnotherServer(AdminConfigRequest r, SmtpSecurity? smtpSecurity, PluginConfiguration c)
+    {
+        if (r.SmtpHost is not null && !string.IsNullOrEmpty(c.SmtpPassword) && string.IsNullOrEmpty(r.SmtpPassword) && r.ClearSmtpPassword != true
+            && !string.Equals(r.SmtpHost.Trim(), c.SmtpHost?.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return "smtp_server_changed";
+        }
+
+        // Turning encryption off would send the stored password in clear to the same host.
+        if (smtpSecurity == SmtpSecurity.None && c.SmtpSecurity != SmtpSecurity.None
+            && !string.IsNullOrEmpty(c.SmtpPassword) && string.IsNullOrEmpty(r.SmtpPassword) && r.ClearSmtpPassword != true)
+        {
+            return "smtp_encryption_off";
+        }
+
+        if (r.SeerrUrl is not null && !string.IsNullOrEmpty(c.SeerrApiKey) && string.IsNullOrEmpty(r.SeerrApiKey)
+            && ServerOf(r.SeerrUrl).Length > 0 && !string.Equals(ServerOf(r.SeerrUrl), ServerOf(c.SeerrUrl), StringComparison.Ordinal))
+        {
+            return "seerr_address_changed";
+        }
+
+        return null;
+    }
+
+    // Scheme, host and port of an address, in lower case; the path does not name another server. Empty when there is none.
+    private static string ServerOf(string? url)
+        => Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var uri) ? $"{uri.Scheme}://{uri.Host}:{uri.Port}".ToLowerInvariant() : string.Empty;
 
     private static string? Validate(AdminConfigRequest r, out SmtpSecurity? smtpSecurity, out SessionClosePolicy? sessions)
     {

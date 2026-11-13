@@ -2,11 +2,11 @@ Subject: Confirmez votre adresse e-mail sur {{serverName}}
 
 Bonjour {{username}},
 
-Cette adresse e-mail vient d'être indiquée pour votre compte sur {{serverName}}. Elle servira à retrouver votre mot de passe si vous l'oubliez.
+Cette adresse e-mail vient d’être indiquée pour votre compte sur {{serverName}}. Elle servira à retrouver votre mot de passe si vous l’oubliez.
 
 Pour la confirmer, ouvrez ce lien :
 {{link}}
 
-Ce lien est valable jusqu'au {{expires}}.
+Ce lien est valable jusqu’au {{expires}}.
 
-Si vous n'êtes pas à l'origine de cette demande, vous pouvez ignorer ce message : l'adresse ne sera pas utilisée.
+Si vous n’êtes pas à l’origine de cette demande, vous pouvez ignorer ce message : l’adresse ne sera pas utilisée.

@@ -42,6 +42,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<EmailQueue>>(),
             sp.GetRequiredService<TimeProvider>()));
         serviceCollection.AddSingleton<ProxyGuard>();
+        serviceCollection.AddSingleton<ServiceGate>();
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<EmailQueue>());
         serviceCollection.AddSingleton<SessionCloser>();
         serviceCollection.AddSingleton<RecoveryService>();
@@ -52,12 +53,16 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<ISeerrSync>(sp => sp.GetRequiredService<SeerrSync>());
         serviceCollection.AddSingleton<EmailService>();
         serviceCollection.AddSingleton<IEventConsumer<UserDeletedEventArgs>>(sp => sp.GetRequiredService<EmailService>());
+        serviceCollection.AddSingleton<EmailLoginResolver>();
+        serviceCollection.AddSingleton<EmailLoginProbe>();
         serviceCollection.AddSingleton<AvatarSaver>();
         serviceCollection.AddSingleton<InvitationService>();
         serviceCollection.AddSingleton<ForgotPasswordResponses>();
         serviceCollection.AddSingleton<PageRenderer>();
         serviceCollection.AddTransient<ForgotPasswordFilter>();
         serviceCollection.Configure<MvcOptions>(o => o.Filters.Add<ForgotPasswordFilter>());
+        serviceCollection.AddTransient<EmailLoginFilter>();
+        serviceCollection.Configure<MvcOptions>(o => o.Filters.Add<EmailLoginFilter>());
         serviceCollection.AddSingleton<IPasswordResetProvider, MailConciergePasswordResetProvider>();
         serviceCollection.AddTransient<IStartupFilter, IndexInjectionStartupFilter>();
     }

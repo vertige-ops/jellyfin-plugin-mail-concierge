@@ -1,14 +1,14 @@
-Subject: L'adresse e-mail de votre compte {{serverName}} a été changée
+Subject: L’adresse e-mail de votre compte {{serverName}} a été changée
 
 Bonjour {{username}},
 
-L'adresse e-mail de votre compte sur {{serverName}} vient d'être remplacée par une autre. Vous recevez ce message sur l'ancienne adresse.
+L’adresse e-mail de votre compte sur {{serverName}} vient d’être remplacée par une autre. Vous recevez ce message sur l’ancienne adresse.
 
-Si c'est vous, il n'y a rien à faire. Si ce n'est pas vous :
+Si c’est vous, il n’y a rien à faire. Si ce n’est pas vous :
 
-1. Annulez ce changement avec le lien ci-dessous (valable jusqu'au {{expires}}).
+1. Annulez ce changement avec le lien ci-dessous (valable jusqu’au {{expires}}).
 2. Changez ensuite votre mot de passe, avec « Mot de passe oublié » sur la page de connexion.
-3. Prévenez l'administrateur de {{serverName}}.
+3. Prévenez l’administrateur de {{serverName}}.
 
 Lien pour annuler :
 {{cancelLink}}

@@ -20,6 +20,8 @@
   "profile.error.rateLimited": "Zu viele Versuche. Bitte versuchen Sie es später erneut.",
   "profile.error.passwordLocked": "Zu viele falsche Passwörter. Aus Sicherheitsgründen wird das Passwort eine Stunde lang nicht mehr geprüft. Wenn Ihr Konto gesperrt ist, bitten Sie den Administrator, es zu entsperren.",
   "profile.error.unavailable": "Der E-Mail-Versand ist auf diesem Server nicht eingerichtet. Wenden Sie sich an den Administrator.",
-  "forgot.next": "Geben Sie auf der nächsten Seite Ihren Benutzernamen und den erhaltenen Code ein.",
-  "pin.username": "Benutzername"
+  "profile.error.closed": "Mail Concierge ist auf diesem Server derzeit nicht verfügbar. Wenden Sie sich an den Administrator.",
+  "forgot.next": "Geben Sie auf der nächsten Seite Ihren Benutzernamen oder Ihre E-Mail-Adresse und den erhaltenen Code ein.",
+  "pin.username": "Benutzername oder E-Mail-Adresse",
+  "login.usernameOrEmail": "Benutzername oder E-Mail"
 }

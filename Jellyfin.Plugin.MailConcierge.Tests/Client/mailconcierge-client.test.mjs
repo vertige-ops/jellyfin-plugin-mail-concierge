@@ -22,7 +22,9 @@ for (const lang of readdirSync(`${resources}Strings`).filter((f) => f.endsWith('
 }
 const raw = readFileSync(`${resources}Client/mailconcierge-client.js`, 'utf8');
 assert.ok(raw.includes('/*MAILCONCIERGE_STRINGS*/null'));
-const SCRIPT = raw.replace('/*MAILCONCIERGE_STRINGS*/null', JSON.stringify(STRINGS));
+assert.ok(raw.includes('const FLAGS = /*MAILCONCIERGE_FLAGS*/null || {};'));
+const scriptFor = (flags) => raw.replace('/*MAILCONCIERGE_STRINGS*/null', JSON.stringify(STRINGS)).replace('/*MAILCONCIERGE_FLAGS*/null', JSON.stringify(flags));
+const SCRIPT = scriptFor({ emailLogin: false });
 
 const frame = () => new Promise((resolve) => setTimeout(resolve, 40));
 async function settle(n = 3) {
@@ -77,7 +79,7 @@ async function load(hash, body, options = {}) {
     script.src = 'http://jf.test/jf/MailConcierge/client.js';
     w.document.head.appendChild(script);
     Object.defineProperty(w.document, 'currentScript', { configurable: true, get: () => script });
-    w.eval(SCRIPT);
+    w.eval(options.flags ? scriptFor(options.flags) : SCRIPT);
     Object.defineProperty(w.document, 'currentScript', { configurable: true, get: () => null });
     await settle();
     return { w, d: w.document, calls, logs, pageErrors, jsdomErrors };
@@ -264,6 +266,24 @@ test('my profile: a locked password (423) shows the dedicated message', async ()
     assert.equal(form.querySelector('[role="status"]').textContent, STRINGS.en['profile.error.passwordLocked']);
 });
 
+for (const [lang, code, key] of [['en', 'closed', 'profile.error.closed'], ['fr', 'closed', 'profile.error.closed'], ['en', 'unavailable', 'profile.error.unavailable']]) {
+    test(`my profile: a 503 with code ${code} shows ${key} (${lang})`, async () => {
+        const { d, w } = await load(`#/userprofile?userId=${ADMIN_ID}`, fixture('userprofile'), {
+            lang,
+            ajax: (req) => (req.type === 'GET'
+                ? Promise.resolve({ email: 'me@example.org', pendingEmail: null })
+                : Promise.reject({ status: 503, json: () => Promise.resolve({ code }) }))
+        });
+        const form = d.querySelector('[data-mailconcierge="me-email"]');
+        form.querySelector('#mailConciergeMyEmail').value = 'n@example.org';
+        form.querySelector('#mailConciergeMyPassword').value = 'secret';
+        submit(w, form);
+        await settle();
+        assert.ok(STRINGS[lang][key]);
+        assert.equal(form.querySelector('[role="status"]').textContent, STRINGS[lang][key]);
+    });
+}
+
 test('language: the Jellyfin display language wins over the browser language, an unsupported one gives English', async () => {
     const profile = (lang, stored) => load(`#/userprofile?userId=${ADMIN_ID}`, fixture('userprofile'), {
         lang,
@@ -338,4 +358,39 @@ test('PIN page: generic error shown inline on failure', async () => {
     assert.equal(error.hidden, false);
     assert.equal(error.textContent, STRINGS.en['pin.error']);
     assert.equal(d.querySelector('button[type="submit"]').disabled, false);
+});
+
+for (const [lang, label] of [['fr', 'Nom d’utilisateur ou e-mail'], ['en', 'User name or e-mail']]) {
+    test(`sign-in: label is rewritten when the flag is on (${lang})`, async () => {
+        const { d } = await load('#/login', fixture('login'), { lang, anon: true, flags: { emailLogin: true } });
+        assert.equal(d.querySelector('label[for="txtManualName"]').textContent, STRINGS[lang]['login.usernameOrEmail']);
+        assert.equal(STRINGS[lang]['login.usernameOrEmail'], label);
+        assert.equal(d.querySelector('label[for="txtManualPassword"]').textContent, 'Password');
+        assert.equal(d.querySelector('button span').textContent, 'Sign In');
+    });
+}
+
+test('sign-in: label is untouched when the flag is off', async () => {
+    const { d } = await load('#/login', fixture('login'), { anon: true, flags: { emailLogin: false } });
+    assert.equal(d.querySelector('label[for="txtManualName"]').textContent, 'User');
+    const none = await load('#/login', fixture('login'), { anon: true });
+    assert.equal(none.d.querySelector('label[for="txtManualName"]').textContent, 'User');
+});
+
+test('sign-in: rewriting twice changes nothing, and a redrawn label is rewritten again', async () => {
+    const { d, w } = await load('#/login', fixture('login'), { anon: true, flags: { emailLogin: true } });
+    const label = d.querySelector('label[for="txtManualName"]');
+    assert.equal(label.textContent, 'User name or e-mail');
+    assert.equal(await mutationsAfterSettle(w), 0);
+    label.textContent = 'User';
+    await settle();
+    assert.equal(label.textContent, 'User name or e-mail');
+    assert.equal(await mutationsAfterSettle(w), 0);
+});
+
+test('sign-in: no label on the page, no throw, nothing touched', async () => {
+    const { d, pageErrors, logs } = await load('#/home', '<label for="other">Other</label>', { anon: true, flags: { emailLogin: true } });
+    assert.equal(d.querySelector('label').textContent, 'Other');
+    assert.deepEqual(pageErrors, []);
+    assert.deepEqual(logs, []);
 });

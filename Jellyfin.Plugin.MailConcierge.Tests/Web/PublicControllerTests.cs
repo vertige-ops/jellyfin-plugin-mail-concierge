@@ -14,6 +14,7 @@ using Jellyfin.Plugin.MailConcierge.Email;
 using Jellyfin.Plugin.MailConcierge.Invitations;
 using Jellyfin.Plugin.MailConcierge.Security;
 using Jellyfin.Plugin.MailConcierge.Seerr;
+using Jellyfin.Plugin.MailConcierge.Tests.Security;
 using Jellyfin.Plugin.MailConcierge.Web;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Controller;
@@ -51,6 +52,8 @@ public sealed class PublicControllerTests : IDisposable
     private readonly InvitationService _invitations;
     private readonly PageRenderer _renderer;
     private readonly PublicController _controller;
+    private readonly ProxyGuard _guard;
+    private readonly RateLimiter _limiter;
     private readonly User _bob = new("bob", AccountPolicy.DefaultAuthProviderId, "reset") { Id = Guid.NewGuid() };
 
     public PublicControllerTests()
@@ -59,18 +62,21 @@ public sealed class PublicControllerTests : IDisposable
         _store = new MailConciergeStore(_dir);
         _tokens = new TokenService(_dir);
         var limiter = new RateLimiter(_time);
+        _limiter = limiter;
         var transport = new Mock<IEmailTransport>();
         var queue = new EmailQueue(() => _config, transport.Object, limiter, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero });
         var serverConfig = new Mock<IServerConfigurationManager>();
         serverConfig.Setup(c => c.GetConfiguration("network")).Returns(new NetworkConfiguration { KnownProxies = Array.Empty<string>(), BaseUrl = "/jf" });
         var guard = new ProxyGuard(serverConfig.Object);
+        _guard = guard;
+        var gate = new ServiceGate(() => _config, guard);
         _host.SetupGet(h => h.FriendlyName).Returns("My Jellyfin");
         var closer = new SessionCloser(Mock.Of<IDeviceManager>(), Mock.Of<ISessionManager>(), _time, NullLogger<SessionCloser>.Instance);
-        _recovery = new RecoveryService(_store, _tokens, limiter, queue, guard, _users.Object, closer, _host.Object, () => _config, _time, NullLogger<RecoveryService>.Instance, TimeSpan.Zero);
-        _email = new EmailService(_store, _tokens, limiter, queue, _users.Object, new SessionCloser(Mock.Of<IDeviceManager>(), Mock.Of<ISessionManager>(), _time, NullLogger<SessionCloser>.Instance), new NullSeerrSync(), _host.Object, () => _config, _time, NullLogger<EmailService>.Instance);
-        _invitations = new InvitationService(_store, _tokens, limiter, queue, _users.Object, _email, _host.Object, () => _config, _time, NullLogger<InvitationService>.Instance);
+        _email = new EmailService(_store, _tokens, limiter, queue, _users.Object, new SessionCloser(Mock.Of<IDeviceManager>(), Mock.Of<ISessionManager>(), _time, NullLogger<SessionCloser>.Instance), new NullSeerrSync(), _host.Object, () => _config, gate, _time, NullLogger<EmailService>.Instance);
+        _recovery = new RecoveryService(_store, _tokens, limiter, queue, gate, _users.Object, new EmailLoginResolver(_users.Object, _email, () => _config), closer, _host.Object, () => _config, _time, NullLogger<RecoveryService>.Instance, TimeSpan.Zero);
+        _invitations = new InvitationService(_store, _tokens, limiter, queue, _users.Object, Mock.Of<ISessionManager>(), _email, _host.Object, () => _config, gate, _time, NullLogger<InvitationService>.Instance);
         _renderer = new PageRenderer(_host.Object, serverConfig.Object, () => _config);
-        _controller = new PublicController(_recovery, _email, _invitations, _renderer, guard)
+        _controller = new PublicController(_recovery, _email, _invitations, _renderer, guard, gate, limiter)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
@@ -436,6 +442,209 @@ public sealed class PublicControllerTests : IDisposable
         var valid = Assert.IsType<PageResult>(await _controller.Reset(fresh, null));
         Assert.Contains("reset-form", valid.Content, StringComparison.Ordinal);
         Assert.IsType<ContentResult>(await _controller.ResetLink(new LinkRequest(fresh)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Closed_GetConfirm_ShowsMessagePage(bool guardTripped)
+    {
+        var (confirm, _) = await SeedEmailChangeTokens();
+        Close(guardTripped);
+
+        var page = Assert.IsType<PageResult>(await _controller.ConfirmPage(confirm));
+
+        AssertMessagePage(page);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Closed_GetCancel_ShowsMessagePage(bool guardTripped)
+    {
+        var (_, cancel) = await SeedEmailChangeTokens();
+        Close(guardTripped);
+
+        var page = Assert.IsType<PageResult>(await _controller.CancelPage(cancel));
+
+        AssertMessagePage(page);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Closed_GetReset_ShowsMessagePage(bool guardTripped)
+    {
+        var link = await SeedLink();
+        Close(guardTripped);
+
+        AssertMessagePage(Assert.IsType<PageResult>(await _controller.Reset(link, null)));
+        AssertMessagePage(Assert.IsType<PageResult>(await _controller.Reset(null, "session")));
+    }
+
+    [Fact]
+    public async Task PageViews_31stWithinFiveMinutes_Gets429()
+    {
+        for (var i = 0; i < 30; i++)
+        {
+            Assert.Equal(200, Assert.IsType<PageResult>(await _controller.ConfirmPage("x")).StatusCode);
+        }
+
+        var page = Assert.IsType<PageResult>(await _controller.ConfirmPage("x"));
+
+        Assert.Equal(429, page.StatusCode);
+        Assert.Contains("Too many pages were opened from your network", page.Content, StringComparison.Ordinal);
+        Assert.Contains("Too many requests", page.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("<form", page.Content, StringComparison.Ordinal);
+        Assert.Equal("no-store", _controller.Response.Headers.CacheControl.ToString());
+        Assert.True(_controller.Response.Headers.ContainsKey("Content-Security-Policy"));
+    }
+
+    [Fact]
+    public async Task PageViews_AreSharedAcrossTheFourPages()
+    {
+        for (var i = 0; i < 30; i++)
+        {
+            switch (i % 4)
+            {
+                case 0:
+                    await _controller.Reset("x", null);
+                    break;
+                case 1:
+                    await _controller.ConfirmPage("x");
+                    break;
+                case 2:
+                    await _controller.CancelPage("x");
+                    break;
+                default:
+                    await _controller.AcceptPage("x");
+                    break;
+            }
+        }
+
+        Assert.Equal(429, Assert.IsType<PageResult>(await _controller.Reset("x", null)).StatusCode);
+        Assert.Equal(429, Assert.IsType<PageResult>(await _controller.ConfirmPage("x")).StatusCode);
+        Assert.Equal(429, Assert.IsType<PageResult>(await _controller.CancelPage("x")).StatusCode);
+        Assert.Equal(429, Assert.IsType<PageResult>(await _controller.AcceptPage("x")).StatusCode);
+    }
+
+    [Fact]
+    public async Task PageViews_OtherAddress_IsNotLimited()
+    {
+        for (var i = 0; i < 31; i++)
+        {
+            await _controller.ConfirmPage("x");
+        }
+
+        _controller.HttpContext.Connection.RemoteIpAddress = IPAddress.Parse("203.0.113.8");
+
+        Assert.Equal(200, Assert.IsType<PageResult>(await _controller.ConfirmPage("x")).StatusCode);
+    }
+
+    [Fact]
+    public async Task PageViews_ResetAfterFiveMinutes()
+    {
+        for (var i = 0; i < 31; i++)
+        {
+            await _controller.ConfirmPage("x");
+        }
+
+        _time.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+
+        Assert.Equal(200, Assert.IsType<PageResult>(await _controller.ConfirmPage("x")).StatusCode);
+    }
+
+    [Fact]
+    public async Task PageViews_OverLimit_DoesNotReadTheToken()
+    {
+        var (_, link, _) = await _invitations.CreateAsync("alice", null, Array.Empty<string>(), null, "en");
+        var token = link[(link.IndexOf("t=", StringComparison.Ordinal) + 2)..];
+        for (var i = 0; i < 30; i++)
+        {
+            await _controller.ConfirmPage("x");
+        }
+
+        Assert.Equal(429, Assert.IsType<PageResult>(await _controller.AcceptPage(token)).StatusCode);
+        for (var i = 0; i < 12; i++)
+        {
+            Assert.Equal(429, Assert.IsType<PageResult>(await _controller.AcceptPage("wrong")).StatusCode);
+        }
+
+        // Had the wrong tokens been read, ten failures would have blocked this address for fifteen minutes.
+        _time.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+        var page = Assert.IsType<PageResult>(await _controller.AcceptPage(token));
+        Assert.Contains("accept-form", page.Content, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PageViews_AreCountedBeforeTheGate_WhateverTheState(bool guardTripped)
+    {
+        Close(guardTripped);
+        for (var i = 0; i < 30; i++)
+        {
+            AssertMessagePage(Assert.IsType<PageResult>(await _controller.ConfirmPage("x")));
+        }
+
+        var over = Assert.IsType<PageResult>(await _controller.ConfirmPage("x"));
+
+        Assert.Equal(429, over.StatusCode);
+        Assert.Contains("Too many pages were opened from your network", over.Content, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Reset")]
+    [InlineData("Confirm")]
+    [InlineData("Cancel")]
+    [InlineData("Accept")]
+    public async Task EveryPageView_ObservesTheProxyGuard(string page)
+    {
+        _controller.HttpContext.Connection.RemoteIpAddress = IPAddress.Parse("100.64.0.9");
+        _controller.HttpContext.Request.Headers["X-Forwarded-For"] = "203.0.113.5";
+        Assert.False(_guard.Tripped);
+
+        _ = page switch
+        {
+            "Reset" => await _controller.Reset("t", null),
+            "Confirm" => await _controller.ConfirmPage("t"),
+            "Cancel" => await _controller.CancelPage("t"),
+            _ => await _controller.AcceptPage("t"),
+        };
+
+        Assert.True(_guard.Tripped);
+    }
+
+    private static void AssertMessagePage(PageResult page)
+    {
+        Assert.Contains("no longer works", page.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("<form", page.Content, StringComparison.Ordinal);
+    }
+
+    private void Close(bool guardTripped)
+    {
+        if (guardTripped)
+        {
+            Guards.Trip(_guard);
+        }
+        else
+        {
+            _config.Enabled = false;
+        }
+    }
+
+    private async Task<(string Confirm, string Cancel)> SeedEmailChangeTokens()
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        var confirm = _tokens.NewToken();
+        var cancel = _tokens.NewToken();
+        await _store.WriteAsync(d =>
+        {
+            d.Emails.Add(new UserEmail(_bob.Id, "bob@example.org", "new@example.org", "en", now));
+            d.Tokens.Add(new TokenRecord(_tokens.Hash(confirm), TokenPurpose.ConfirmEmail, _bob.Id, null, "new@example.org", now.AddHours(1), 0));
+            d.Tokens.Add(new TokenRecord(_tokens.Hash(cancel), TokenPurpose.CancelEmailChange, _bob.Id, null, "old@example.org", now.AddHours(1), 0));
+        });
+        return (confirm, cancel);
     }
 
     private async Task<string> SeedLink(string language = "en")

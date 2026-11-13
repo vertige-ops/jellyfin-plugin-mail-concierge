@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.MailConcierge.Configuration;
+using Jellyfin.Plugin.MailConcierge.Security;
+using Jellyfin.Plugin.MailConcierge.Tests.Security;
 using Jellyfin.Plugin.MailConcierge.Web;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Configuration;
@@ -148,7 +150,8 @@ public sealed class IndexInjectionTests
     [Fact]
     public void ClientJs_IsServed_WithStrings()
     {
-        var controller = new ClientScriptController
+        var config = new PluginConfiguration();
+        var controller = new ClientScriptController(() => config, new ServiceGate(() => config, Guards.Quiet()), ClientScriptControllerTests.Probe(available: true))
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
@@ -168,7 +171,7 @@ public sealed class IndexInjectionTests
         var en = json.RootElement.GetProperty("en");
         var fr = json.RootElement.GetProperty("fr");
         Assert.Equal("If this account has an e-mail address, a code has just been sent to it.", en.GetProperty("forgot.neutral").GetString());
-        Assert.Equal("Si ce compte a une adresse e-mail, un code vient d'y être envoyé.", fr.GetProperty("forgot.neutral").GetString());
+        Assert.Equal("Si ce compte a une adresse e-mail, un code vient d’y être envoyé.", fr.GetProperty("forgot.neutral").GetString());
         Assert.True(en.TryGetProperty("profile.email", out _));
         Assert.True(fr.TryGetProperty("profile.email", out _));
         Assert.Equal(

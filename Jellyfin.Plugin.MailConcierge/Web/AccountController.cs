@@ -98,6 +98,9 @@ public sealed class AccountController : ControllerBase
             // 423, not 429: the client shows a different message (the password is not checked for the rest of the hour).
             ChangeResult.PasswordLocked => Code(StatusCodes.Status423Locked, "passwordLocked"),
             ChangeResult.Unavailable => Code(StatusCodes.Status503ServiceUnavailable, "unavailable"),
+
+            // Disabled or blocked by the proxy guard: the client says so instead of the "e-mail not set up" message.
+            ChangeResult.Closed => Code(StatusCodes.Status503ServiceUnavailable, "closed"),
             _ => Code(StatusCodes.Status400BadRequest, "invalidEmail"),
         };
     }
@@ -183,21 +186,22 @@ public sealed class AccountController : ControllerBase
     /// <summary>
     /// Imports the selected Seerr addresses as confirmed addresses.
     /// </summary>
-    /// <param name="request">The ids of the users to import.</param>
-    /// <returns>The number of addresses imported, or 503 with <c>seerr_disabled</c> / <c>seerr_unreachable</c>.</returns>
+    /// <param name="request">The pairs of user id and address seen in the preview.</param>
+    /// <returns>The number of addresses imported and the number that changed in Seerr since the preview, or 503 with <c>seerr_disabled</c> / <c>seerr_unreachable</c>.</returns>
     [HttpPost("Seerr/Import")]
     [Authorize(Policy = Policies.RequiresElevation)]
     [RequestSizeLimit(MaxImportBodyBytes)]
     public async Task<ActionResult> SeerrImport([FromBody] SeerrImportRequest? request)
     {
-        if (request?.UserIds is null)
+        if (request?.Items is null)
         {
             return Code(StatusCodes.Status400BadRequest, "invalidRequest");
         }
 
         try
         {
-            return Json(StatusCodes.Status200OK, new { imported = await _seerr.ApplyImportAsync(request.UserIds).ConfigureAwait(false) });
+            var result = await _seerr.ApplyImportAsync(request.Items).ConfigureAwait(false);
+            return Json(StatusCodes.Status200OK, new { imported = result.Imported, changed = result.Changed });
         }
         catch (SeerrUnavailableException ex)
         {

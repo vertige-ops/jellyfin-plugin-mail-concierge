@@ -11,6 +11,8 @@
 
     // Replaced by ClientScriptController with { "<lang>": { "<key>": "<text>" } }.
     const STRINGS = /*MAILCONCIERGE_STRINGS*/null;
+    // Replaced on every request by { "emailLogin": true|false } (nothing else: the script is served to signed-out visitors).
+    const FLAGS = /*MAILCONCIERGE_FLAGS*/null || {};
     const SELF = document.currentScript;
     const MARK = 'data-mailconcierge';
     const USERNAME_KEY = 'mailconcierge.username';
@@ -431,7 +433,10 @@
                 } else if (code === 429) {
                     setText(status, t('profile.error.rateLimited'));
                 } else if (code === 503) {
-                    setText(status, t('profile.error.unavailable'));
+                    // 503 "closed": Mail Concierge is disabled or blocked; any other 503: e-mail is not set up.
+                    return codeOf(err).then(function (reason) {
+                        setText(status, t(reason === 'closed' ? 'profile.error.closed' : 'profile.error.unavailable'));
+                    });
                 } else if (code === 400) {
                     setText(status, t('error.invalidEmail'));
                 } else {
@@ -573,7 +578,22 @@
 
     // ---- Driver ------------------------------------------------------------------------------------------------
 
-    const hooks = [applyUsersList, applyUserEdit, applyMyProfile, applyForgotDialog, applyPinPage].map(safe);
+    // Sign-in page: with e-mail sign-in on, the user name field also takes the e-mail address.
+    function applyLoginLabel() {
+        if (FLAGS.emailLogin !== true) {
+            return;
+        }
+        const label = document.querySelector('label[for="txtManualName"]');
+        if (!label) {
+            return;
+        }
+        const text = t('login.usernameOrEmail');
+        if (text && label.textContent !== text) {
+            label.textContent = text;
+        }
+    }
+
+    const hooks = [applyUsersList, applyUserEdit, applyMyProfile, applyForgotDialog, applyPinPage, applyLoginLabel].map(safe);
 
     // The hash router navigates with history.pushState, which fires no hashchange: route changes are seen here.
     let lastPath = null;

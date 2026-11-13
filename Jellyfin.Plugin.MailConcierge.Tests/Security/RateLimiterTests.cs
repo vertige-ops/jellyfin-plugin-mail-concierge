@@ -141,6 +141,73 @@ public class RateLimiterTests
     }
 
     [Fact]
+    public void Cap_EvictsPerClientAddressEntriesFirst_SoTheEmailBudgetsSurviveAFlood()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new RateLimiter(time, 100);
+        var hour = TimeSpan.FromHours(1);
+        var account = Guid.NewGuid().ToString("N");
+
+        // The server-wide budget and the per-account budget are created first and used up.
+        Assert.True(limiter.TryAcquire(RateLimitBuckets.RecoveryEmail, "global", 2, hour));
+        Assert.True(limiter.TryAcquire(RateLimitBuckets.RecoveryEmail, "global", 2, hour));
+        Assert.True(limiter.TryAcquire(RateLimitBuckets.ForgotAccount, account, 1, hour));
+
+        // A flood of distinct client addresses on the page-view bucket, well beyond the cap.
+        for (var i = 0; i < 1000; i++)
+        {
+            time.Advance(TimeSpan.FromMilliseconds(1));
+            limiter.TryAcquire(RateLimitBuckets.PageViewIp, "203.0.113." + i, 30, TimeSpan.FromMinutes(5));
+        }
+
+        Assert.InRange(limiter.Count, 1, 100);
+        Assert.False(limiter.TryAcquire(RateLimitBuckets.RecoveryEmail, "global", 2, hour));
+        Assert.False(limiter.TryAcquire(RateLimitBuckets.ForgotAccount, account, 1, hour));
+    }
+
+    [Fact]
+    public void Cap_WithOnlyPerClientAddressEntries_KeepsBlockedThenNewest()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new RateLimiter(time, 100);
+        limiter.Penalize(RateLimitBuckets.TokenFailIp, "198.51.100.1", TimeSpan.FromHours(1));
+        for (var i = 0; i < 1000; i++)
+        {
+            time.Advance(TimeSpan.FromMilliseconds(1));
+            limiter.TryAcquire(RateLimitBuckets.PageViewIp, "k" + i, 5, Window);
+        }
+
+        Assert.InRange(limiter.Count, 1, 100);
+        Assert.True(limiter.IsBlocked(RateLimitBuckets.TokenFailIp, "198.51.100.1"));
+
+        // The newest key is still tracked (its first hit counts); the oldest were evicted first.
+        for (var i = 0; i < 4; i++)
+        {
+            Assert.True(limiter.TryAcquire(RateLimitBuckets.PageViewIp, "k999", 5, Window));
+        }
+
+        Assert.False(limiter.TryAcquire(RateLimitBuckets.PageViewIp, "k999", 5, Window));
+    }
+
+    [Fact]
+    public void PerClientAddressBuckets_AreExactlyTheOnesKeyedByAClientAddress()
+    {
+        Assert.True(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.ForgotIp));
+        Assert.True(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.PinFailIp));
+        Assert.True(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.TokenFailIp));
+        Assert.True(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.PageViewIp));
+
+        Assert.False(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.ForgotAccount));
+        Assert.False(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.RecoveryEmail));
+        Assert.False(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.InvitationEmail));
+        Assert.False(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.AccountEmail));
+        Assert.False(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.UsernameCheckToken));
+        Assert.False(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.EmailChangeUser));
+        Assert.False(RateLimitBuckets.IsPerClientAddress(RateLimitBuckets.PasswordFailUser));
+        Assert.False(RateLimitBuckets.IsPerClientAddress("b"));
+    }
+
+    [Fact]
     public void DefaultCap_Is50000() => Assert.Equal(50_000, RateLimiter.DefaultMaxEntries);
 
     [Fact]

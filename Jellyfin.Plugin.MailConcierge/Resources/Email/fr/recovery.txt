@@ -6,11 +6,11 @@ Vous avez demandé à changer votre mot de passe sur {{serverName}}.
 
 Votre code PIN : {{pin}}
 
-Si vous avez gardé la page « Mot de passe oublié » ouverte, saisissez ce code à l'écran.
+Si vous avez gardé la page « Mot de passe oublié » ouverte, saisissez ce code à l’écran.
 
 Sinon, ouvrez simplement ce lien pour choisir un nouveau mot de passe :
 {{link}}
 
-Le code et le lien sont valables jusqu'à {{expires}} et ne fonctionnent qu'une seule fois. Ne les communiquez à personne.
+Le code et le lien sont valables jusqu’à {{expires}} et ne fonctionnent qu’une seule fois. Ne les communiquez à personne.
 
-Si vous n'êtes pas à l'origine de cette demande, vous pouvez ignorer ce message : rien ne sera modifié.
+Si vous n’êtes pas à l’origine de cette demande, vous pouvez ignorer ce message : rien ne sera modifié.

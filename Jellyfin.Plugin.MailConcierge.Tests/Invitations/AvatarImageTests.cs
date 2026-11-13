@@ -151,6 +151,57 @@ public sealed class AvatarImageTests
         => Assert.False(AvatarImage.TryValidate(new byte[] { 0xFF, 0xD8, 0xFF, 0xDA, 0, 4, 0, 0, 0xFF, 0xD9 }, out _));
 
     [Fact]
+    public void Jpeg_TwoFrameHeaders_IsRejected()
+        => Assert.False(AvatarImage.TryValidate(JpegOf(Sof(0xC0, 64, 64), Sof(0xC0, 64, 64), Sos()), out _));
+
+    [Fact]
+    public void Jpeg_SecondFrameHeaderOversized_IsRejected()
+        => Assert.False(AvatarImage.TryValidate(JpegOf(Sof(0xC0, 64, 64), Sof(0xC0, 5000, 5000), Sos()), out _));
+
+    [Fact]
+    public void Jpeg_NoFrameHeaderBeforeScan_IsRejected()
+        => Assert.False(AvatarImage.TryValidate(JpegOf(Segment(0xE0, 0, 0), Sos()), out _));
+
+    [Fact]
+    public void Jpeg_SegmentLengthPastTheEnd_IsRejected()
+        => Assert.False(AvatarImage.TryValidate(JpegOf(Sof(0xC0, 64, 64), new byte[] { 0xFF, 0xE1, 0xFF, 0xF0, 1, 2 }, Sos()), out _));
+
+    [Fact]
+    public void Jpeg_FrameHeaderTooShort_IsRejected()
+        => Assert.False(AvatarImage.TryValidate(JpegOf(new byte[] { 0xFF, 0xC0, 0, 7, 8, 0, 64, 0, 64 }, Sos()), out _));
+
+    [Fact]
+    public void Jpeg_ZeroHeight_IsRejected()
+        => Assert.False(AvatarImage.TryValidate(JpegOf(Sof(0xC0, 64, 0), Sos()), out _));
+
+    [Fact]
+    public void Jpeg_SegmentLengthBelowTwo_IsRejected()
+        => Assert.False(AvatarImage.TryValidate(JpegOf(new byte[] { 0xFF, 0xE1, 0, 1 }, Sof(0xC0, 64, 64), Sos()), out _));
+
+    [Theory]
+    [InlineData((byte)0xC0)]
+    [InlineData((byte)0xC2)]
+    public void Jpeg_BaselineAndProgressive_AreAccepted(byte sof)
+        => Assert.True(AvatarImage.TryValidate(JpegOf(Segment(0xE1, 1, 2, 3, 4), Segment(0xDB, 0, 1, 2), Sof(sof, 64, 48), Sos()), out _));
+
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(3, true)]
+    [InlineData(4, true)]
+    [InlineData(0, false)]
+    [InlineData(5, false)]
+    public void Jpeg_FrameHeaderComponentCount_IsChecked(int components, bool accepted)
+        => Assert.Equal(accepted, AvatarImage.TryValidate(JpegOf(Segment(0xE0, 0, 0), SofWith(0xC0, 64, 48, components, components), Sos()), out _));
+
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(1, 2)]
+    [InlineData(3, 1)]
+    [InlineData(3, 4)]
+    public void Jpeg_FrameHeaderLengthNotMatchingTheComponents_IsRejected(int components, int componentEntries)
+        => Assert.False(AvatarImage.TryValidate(JpegOf(SofWith(0xC0, 64, 48, components, componentEntries), Sos()), out _));
+
+    [Fact]
     public void MaxSize_Passes_OneMore_Fails()
     {
         var atLimit = Padded(Png(64, 64), 1_048_576);
@@ -220,6 +271,23 @@ public sealed class AvatarImageTests
         bytes.AddRange(new byte[] { 0xFF, 0xDA, 0, 4, 0, 0, 1, 2, 3, 0xFF, 0xD9 });
         return bytes.ToArray();
     }
+
+    private static byte[] JpegOf(params byte[][] segments)
+        => new byte[] { 0xFF, 0xD8 }.Concat(segments.SelectMany(x => x)).Concat(new byte[] { 0xFF, 0xD9 }).ToArray();
+
+    private static byte[] Segment(byte marker, params byte[] payload)
+        => new byte[] { 0xFF, marker, (byte)((payload.Length + 2) >> 8), (byte)(payload.Length + 2) }.Concat(payload).ToArray();
+
+    private static byte[] Sof(byte marker, int width, int height)
+        => Segment(marker, 8, (byte)(height >> 8), (byte)height, (byte)(width >> 8), (byte)width, 1, 1, 0x11, 0);
+
+    // A frame header declaring `components` components and carrying `entries` component entries of three bytes each.
+    private static byte[] SofWith(byte marker, int width, int height, int components, int entries)
+        => Segment(marker, new byte[] { 8, (byte)(height >> 8), (byte)height, (byte)(width >> 8), (byte)width, (byte)components }
+            .Concat(Enumerable.Range(1, entries).SelectMany(i => new byte[] { (byte)i, 0x11, 0 }))
+            .ToArray());
+
+    private static byte[] Sos() => new byte[] { 0xFF, 0xDA, 0, 4, 0, 0, 1, 2, 3 };
 
     private static byte[] Webp(string kind, int width, int height, bool animated = false, bool animChunk = false)
     {

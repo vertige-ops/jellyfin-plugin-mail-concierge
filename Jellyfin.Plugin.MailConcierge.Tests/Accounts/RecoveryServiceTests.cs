@@ -15,6 +15,7 @@ using Jellyfin.Plugin.MailConcierge.Configuration;
 using Jellyfin.Plugin.MailConcierge.Data;
 using Jellyfin.Plugin.MailConcierge.Email;
 using Jellyfin.Plugin.MailConcierge.Security;
+using Jellyfin.Plugin.MailConcierge.Seerr;
 using Jellyfin.Plugin.MailConcierge.Web;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Configuration;
@@ -25,6 +26,7 @@ using MediaBrowser.Common.Net;
 using MediaBrowser.Model.Configuration;
 using Microsoft.AspNetCore.Http;
 using MediaBrowser.Model.Querying;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Moq;
@@ -59,6 +61,8 @@ public sealed class RecoveryServiceTests : IDisposable
     private readonly RecoveryService _service;
     private readonly ProxyGuard _guard;
     private readonly User _bob = Make("bob");
+    private readonly EmailLoginResolver _resolver;
+    private readonly TestLogger _logger = new();
 
     public RecoveryServiceTests()
     {
@@ -75,8 +79,10 @@ public sealed class RecoveryServiceTests : IDisposable
         var host = new Mock<IServerApplicationHost>();
         host.SetupGet(h => h.FriendlyName).Returns("My Jellyfin");
         var closer = new SessionCloser(_devices.Object, _sessions.Object, _time, NullLogger<SessionCloser>.Instance);
+        var email = new EmailService(_store, _tokens, limiter, _queue, _users.Object, closer, Mock.Of<ISeerrSync>(), host.Object, () => _config, new ServiceGate(() => _config, guard), _time, NullLogger<EmailService>.Instance);
+        _resolver = new EmailLoginResolver(_users.Object, email, () => _config);
         _service = new RecoveryService(
-            _store, _tokens, limiter, _queue, guard, _users.Object, closer, host.Object, () => _config, _time, NullLogger<RecoveryService>.Instance, TimeSpan.Zero);
+            _store, _tokens, limiter, _queue, new ServiceGate(() => _config, guard), _users.Object, _resolver, closer, host.Object, () => _config, _time, _logger, TimeSpan.Zero);
 
         _users.Setup(u => u.GetUserByName("bob")).Returns(_bob);
         _users.Setup(u => u.GetUserById(_bob.Id)).Returns(_bob);
@@ -464,7 +470,7 @@ public sealed class RecoveryServiceTests : IDisposable
         var fr = responses.Neutral("fr");
 
         Assert.Equal("If this account has an e-mail address, a code has just been sent to it.", en.PinFile);
-        Assert.Equal("Si ce compte a une adresse e-mail, un code vient d'y être envoyé.", fr.PinFile);
+        Assert.Equal("Si ce compte a une adresse e-mail, un code vient d’y être envoyé.", fr.PinFile);
         Assert.Equal(MediaBrowser.Model.Users.ForgotPasswordAction.PinCode, en.Action);
         Assert.Equal(new DateTime(2026, 10, 31, 12, 30, 0, DateTimeKind.Utc), en.PinExpirationDate);
     }
@@ -520,12 +526,50 @@ public sealed class RecoveryServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Request_AddressReplacedBetweenReadAndWrite_MailsTheNewAddressOnly()
+    {
+        await Confirm(_bob);
+        var service = ServiceWithHookAfterAccountLimit(() => ReplaceEmail(_bob, "bob.new@example.org", confirmed: true));
+
+        await service.RequestAsync("bob", Ip);
+
+        var mail = Assert.Single(await _transport.WaitForAsync(1));
+        Assert.Equal("bob.new@example.org", mail.To);
+        await _transport.ExpectNoneAsync(1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Request_AddressRemovedOrUnconfirmedBetweenReadAndWrite_QueuesNothingAndStoresNoToken(bool removed)
+    {
+        await Confirm(_bob);
+        var service = ServiceWithHookAfterAccountLimit(() =>
+        {
+            if (removed)
+            {
+                _store.WriteAsync(d => d.Emails.RemoveAll(e => e.UserId == _bob.Id)).GetAwaiter().GetResult();
+            }
+            else
+            {
+                ReplaceEmail(_bob, "bob.new@example.org", confirmed: false);
+            }
+        });
+
+        await service.RequestAsync("bob", Ip);
+
+        await _transport.ExpectNoneAsync();
+        var tokens = await _store.ReadAsync(d => d.Tokens.Count(t => t.UserId == _bob.Id && t.Purpose is TokenPurpose.ResetPin or TokenPurpose.ResetLink));
+        Assert.Equal(0, tokens);
+    }
+
+    [Fact]
     public async Task RedeemPin_TakesAtLeastTheResponseFloor_WhateverTheOutcome()
     {
         await Confirm(_bob);
         var limiter = new RateLimiter(_time);
         var service = new RecoveryService(
-            _store, _tokens, limiter, _queue, _guard, _users.Object, new SessionCloser(_devices.Object, _sessions.Object, _time, NullLogger<SessionCloser>.Instance),
+            _store, _tokens, limiter, _queue, new ServiceGate(() => _config, _guard), _users.Object, _resolver, new SessionCloser(_devices.Object, _sessions.Object, _time, NullLogger<SessionCloser>.Instance),
             Mock.Of<IServerApplicationHost>(), () => _config, _time, NullLogger<RecoveryService>.Instance, TimeSpan.FromMilliseconds(300));
 
         foreach (var name in new[] { "bob", "nobody" })
@@ -538,6 +582,216 @@ public sealed class RecoveryServiceTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Request_ByConfirmedAddress_SendsTheSameRecoveryEmailAsByName()
+    {
+        await Confirm(_bob);
+        _config.EmailLogin = false;
+
+        await _service.RequestAsync("bob", Ip);
+        await _service.RequestAsync("bob@example.org", Ip);
+
+        var mails = await _transport.WaitForAsync(2);
+        Assert.Equal(mails[0].To, mails[1].To);
+        Assert.Equal("bob@example.org", mails[1].To);
+        Assert.Equal("recovery", mails[1].Template);
+        Assert.Equal(mails[0].Subject, mails[1].Subject);
+        Assert.Contains("bob", mails[1].Text, StringComparison.Ordinal);
+        Assert.Matches(@"\b\d{4}-\d{4}\b", mails[1].Text);
+        Assert.Contains("https://jf.example/MailConcierge/Reset?t=", mails[1].Text, StringComparison.Ordinal);
+        Assert.Equal(1, await _store.ReadAsync(d => d.Tokens.Count(t => t.Purpose == TokenPurpose.ResetPin)));
+    }
+
+    [Theory]
+    [InlineData("BOB@Example.ORG")]
+    [InlineData("  bob@example.org  ")]
+    public async Task Request_ByAddressInOtherCaseOrWithSpaces_Sends(string typed)
+    {
+        await Confirm(_bob);
+
+        await _service.RequestAsync(typed, Ip);
+
+        var mail = Assert.Single(await _transport.WaitForAsync(1));
+        Assert.Equal("bob@example.org", mail.To);
+    }
+
+    [Fact]
+    public async Task Request_ByUnconfirmedUnknownOrSharedAddress_SendsNothingAndWritesNoToken()
+    {
+        var alice = Make("alice");
+        var carol = Make("carol");
+        _users.Setup(u => u.GetUserById(alice.Id)).Returns(alice);
+        _users.Setup(u => u.GetUserById(carol.Id)).Returns(carol);
+        await _store.WriteAsync(d =>
+        {
+            d.Emails.Add(new UserEmail(_bob.Id, "bob@example.org", null, "en", null));
+            d.Emails.Add(new UserEmail(alice.Id, "shared@example.org", null, "en", _time.GetUtcNow().UtcDateTime));
+            d.Emails.Add(new UserEmail(carol.Id, "shared@example.org", null, "en", _time.GetUtcNow().UtcDateTime));
+        });
+
+        foreach (var typed in new[] { "bob@example.org", "nobody@example.org", "shared@example.org" })
+        {
+            await _service.RequestAsync(typed, Ip);
+        }
+
+        await _transport.ExpectNoneAsync();
+        Assert.Equal(0, await _store.ReadAsync(d => d.Tokens.Count));
+    }
+
+    [Fact]
+    public async Task Request_UserNameEqualToTypedTextWinsOverAnotherAccountsAddress()
+    {
+        var odd = Make("bob@example.org");
+        _users.Setup(u => u.GetUserByName("bob@example.org")).Returns(odd);
+        _users.Setup(u => u.GetUserById(odd.Id)).Returns(odd);
+        await Confirm(_bob);
+        await _store.WriteAsync(d => d.Emails.Add(new UserEmail(odd.Id, "odd@example.org", null, "en", _time.GetUtcNow().UtcDateTime)));
+
+        await _service.RequestAsync("bob@example.org", Ip);
+
+        var mail = Assert.Single(await _transport.WaitForAsync(1));
+        Assert.Equal("odd@example.org", mail.To);
+    }
+
+    [Fact]
+    public async Task Request_ByAddress_DoesNotDependOnEmailLogin_NorOnPasswordOrFailureCounter()
+    {
+        _config.EmailLogin = false;
+        _bob.Password = null;
+        _bob.InvalidLoginAttemptCount = 9;
+        await Confirm(_bob);
+
+        await _service.RequestAsync("bob@example.org", Ip);
+
+        Assert.Single(await _transport.WaitForAsync(1));
+    }
+
+    [Theory]
+    [InlineData("admin")]
+    [InlineData("disabled")]
+    [InlineData("provider")]
+    public async Task Request_ByAddress_OfAnIneligibleAccount_SendsNothing(string kind)
+    {
+        switch (kind)
+        {
+            case "admin":
+                _bob.SetPermission(PermissionKind.IsAdministrator, true);
+                break;
+            case "disabled":
+                _bob.SetPermission(PermissionKind.IsDisabled, true);
+                break;
+            default:
+                _bob.AuthenticationProviderId = "Other.Provider";
+                break;
+        }
+
+        await Confirm(_bob);
+
+        await _service.RequestAsync("bob@example.org", Ip);
+
+        await _transport.ExpectNoneAsync();
+        Assert.Equal(0, await _store.ReadAsync(d => d.Tokens.Count));
+    }
+
+    [Fact]
+    public async Task Request_AccountLimitIsSharedBetweenNameAndAddress()
+    {
+        await Confirm(_bob);
+
+        await _service.RequestAsync("bob", Ip);
+        await _service.RequestAsync("bob@example.org", Ip);
+        await _service.RequestAsync("bob", Ip);
+        await _service.RequestAsync("bob@example.org", Ip);
+        await _service.RequestAsync("bob", Ip);
+
+        Assert.Equal(3, (await _transport.WaitForAsync(3)).Count);
+        await _transport.ExpectNoneAsync(3);
+    }
+
+    [Fact]
+    public async Task RedeemPin_ByAddress_WithTheRightPin_GivesASession()
+    {
+        await Confirm(_bob);
+        await _service.RequestAsync("bob", Ip);
+        var pin = PinOf((await _transport.WaitForAsync(1))[0]);
+
+        Assert.NotNull(await _service.RedeemPinAsync("  Bob@example.org ", pin, Ip));
+    }
+
+    [Fact]
+    public async Task RedeemPin_ByNameAndByAddress_ExhaustTheSamePin()
+    {
+        await Confirm(_bob);
+        await _service.RequestAsync("bob", Ip);
+        var pin = PinOf((await _transport.WaitForAsync(1))[0]);
+        var wrong = pin == "0000-0000" ? "1111-1111" : "0000-0000";
+
+        Assert.Null(await _service.RedeemPinAsync("bob", wrong, Ip));
+        Assert.Null(await _service.RedeemPinAsync("bob@example.org", wrong, Ip));
+        Assert.Null(await _service.RedeemPinAsync("bob", wrong, Ip));
+        Assert.Null(await _service.RedeemPinAsync("bob@example.org", wrong, Ip));
+        Assert.Equal(1, await _store.ReadAsync(d => d.Tokens.Count(t => t.Purpose == TokenPurpose.ResetPin)));
+        Assert.Null(await _service.RedeemPinAsync("bob@example.org", wrong, Ip));
+
+        Assert.Equal(0, await _store.ReadAsync(d => d.Tokens.Count(t => t.Purpose == TokenPurpose.ResetPin)));
+        Assert.Null(await _service.RedeemPinAsync("bob", pin, Ip));
+    }
+
+    [Fact]
+    public async Task RedeemPin_ByUnknownOrSharedAddress_ReturnsNull()
+    {
+        var alice = Make("alice");
+        _users.Setup(u => u.GetUserById(alice.Id)).Returns(alice);
+        await Confirm(_bob);
+        await _service.RequestAsync("bob", Ip);
+        var pin = PinOf((await _transport.WaitForAsync(1))[0]);
+        await _store.WriteAsync(d => d.Emails.Add(new UserEmail(alice.Id, "bob@example.org", null, "en", _time.GetUtcNow().UtcDateTime)));
+
+        Assert.Null(await _service.RedeemPinAsync("bob@example.org", pin, Ip));
+        Assert.Null(await _service.RedeemPinAsync("nobody@example.org", pin, Ip));
+        Assert.NotNull(await _service.RedeemPinAsync("bob", pin, Ip));
+    }
+
+    [Fact]
+    public async Task RedeemPin_ByAddress_TakesAtLeastTheResponseFloor_WhateverTheOutcome()
+    {
+        var alice = Make("alice");
+        await Confirm(_bob);
+        await _store.WriteAsync(d => d.Emails.Add(new UserEmail(alice.Id, "bob@example.org", null, "en", _time.GetUtcNow().UtcDateTime)));
+        await Confirm(Make("dave"));
+        var service = ServiceWithFloor(TimeSpan.FromMilliseconds(300));
+
+        foreach (var typed in new[] { "nobody@example.org", "bob@example.org", "dave@example.org" })
+        {
+            var pending = service.RedeemPinAsync(typed, "1234-5678", Ip);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+            Assert.False(pending.IsCompleted, typed + " answered before the floor");
+            _time.Advance(TimeSpan.FromMilliseconds(300));
+            Assert.Null(await pending);
+        }
+    }
+
+    [Fact]
+    public async Task AddressLookupFailure_SendsNothing_ReturnsNull_AndLogsOnlyTheExceptionType()
+    {
+        _users.Setup(u => u.GetUserByName("boom@example.org")).Throws(new InvalidOperationException("secret text boom@example.org"));
+        await Confirm(_bob);
+
+        await _service.RequestAsync("boom@example.org", Ip);
+        var session = await _service.RedeemPinAsync("boom@example.org", "1234-5678", Ip);
+
+        Assert.Null(session);
+        await _transport.ExpectNoneAsync();
+        Assert.NotEmpty(_logger.Entries);
+        Assert.Contains(_logger.Entries, e => e.Contains(nameof(InvalidOperationException), StringComparison.Ordinal));
+        Assert.DoesNotContain(_logger.Entries, e => e.Contains("boom@example.org", StringComparison.OrdinalIgnoreCase) || e.Contains("secret text", StringComparison.Ordinal));
+    }
+
+    private RecoveryService ServiceWithFloor(TimeSpan floor)
+        => new(
+            _store, _tokens, new RateLimiter(_time), _queue, new ServiceGate(() => _config, _guard), _users.Object, _resolver, new SessionCloser(_devices.Object, _sessions.Object, _time, NullLogger<SessionCloser>.Instance),
+            Mock.Of<IServerApplicationHost>(), () => _config, _time, NullLogger<RecoveryService>.Instance, floor);
+
     private static User Make(string name)
         => new(name, AccountPolicy.DefaultAuthProviderId, "reset") { Id = Guid.NewGuid() };
 
@@ -545,8 +799,80 @@ public sealed class RecoveryServiceTests : IDisposable
 
     private static string LinkOf(EmailMessage m) => Regex.Match(m.Text, @"[?]t=([\w-]+)").Groups[1].Value;
 
+    private void ReplaceEmail(User user, string address, bool confirmed)
+        => _store.WriteAsync(d =>
+        {
+            d.Emails.RemoveAll(e => e.UserId == user.Id);
+            d.Emails.Add(new UserEmail(user.Id, address, null, "en", confirmed ? _time.GetUtcNow().UtcDateTime : null));
+        }).GetAwaiter().GetResult();
+
+    // The request reads the clock once per rate-limit check (IP, account) and once more just before storing the tokens:
+    // running the hook on the third reading lands it between the first e-mail read and the store write.
+    private RecoveryService ServiceWithHookAfterAccountLimit(Action hook)
+    {
+        var time = new HookedTimeProvider(_time.GetUtcNow(), 3, hook);
+        var limiter = new RateLimiter(time);
+        return new RecoveryService(
+            _store, _tokens, limiter, _queue, new ServiceGate(() => _config, _guard), _users.Object, _resolver, new SessionCloser(_devices.Object, _sessions.Object, time, NullLogger<SessionCloser>.Instance),
+            Mock.Of<IServerApplicationHost>(), () => _config, time, NullLogger<RecoveryService>.Instance, TimeSpan.Zero);
+    }
+
+    private sealed class HookedTimeProvider : FakeTimeProvider
+    {
+        private readonly int _fireOn;
+        private readonly Action _hook;
+        private int _calls;
+
+        public HookedTimeProvider(DateTimeOffset start, int fireOn, Action hook)
+            : base(start)
+        {
+            _fireOn = fireOn;
+            _hook = hook;
+        }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var now = base.GetUtcNow();
+            if (++_calls == _fireOn)
+            {
+                _hook();
+            }
+
+            return now;
+        }
+    }
+
     private Task Confirm(User user)
         => _store.WriteAsync(d => d.Emails.Add(new UserEmail(user.Id, user.Username + "@example.org", null, "en", _time.GetUtcNow().UtcDateTime)));
+
+    private sealed class TestLogger : ILogger<RecoveryService>
+    {
+        private readonly List<string> _entries = new();
+
+        public IReadOnlyList<string> Entries
+        {
+            get
+            {
+                lock (_entries)
+                {
+                    return _entries.ToList();
+                }
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (_entries)
+            {
+                _entries.Add(formatter(state, exception) + " " + exception);
+            }
+        }
+    }
 
     private sealed class CapturingTransport : IEmailTransport
     {

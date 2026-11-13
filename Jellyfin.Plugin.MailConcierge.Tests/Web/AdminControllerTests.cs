@@ -9,14 +9,23 @@ using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.MailConcierge.Accounts;
 using Jellyfin.Plugin.MailConcierge.Configuration;
+using Jellyfin.Plugin.MailConcierge.Data;
 using Jellyfin.Plugin.MailConcierge.Email;
 using Jellyfin.Plugin.MailConcierge.Security;
+using Jellyfin.Plugin.MailConcierge.Seerr;
 using Jellyfin.Plugin.MailConcierge.Web;
 using MediaBrowser.Common.Net;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Configuration;
+using MediaBrowser.Controller.Devices;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Abstractions;
+using Microsoft.AspNetCore.Mvc.Controllers;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Moq;
@@ -32,11 +41,16 @@ public sealed class AdminControllerTests : IDisposable
     private readonly EmailQueue _queue;
     private readonly NetworkConfiguration _net = new() { KnownProxies = Array.Empty<string>() };
     private readonly ProxyGuard _guard;
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "mailconcierge-admin-" + Guid.NewGuid().ToString("N"));
+    private readonly MailConciergeStore _store;
     private int _saves;
+    private EmailLoginProbe _probe = Probe(available: true);
     private AdminController _controller = null!;
 
     public AdminControllerTests()
     {
+        Directory.CreateDirectory(_dir);
+        _store = new MailConciergeStore(_dir);
         _queue = new EmailQueue(() => _config, Mock.Of<IEmailTransport>(), new RateLimiter(_time), NullLogger<EmailQueue>.Instance, _time);
         var cfg = new Mock<IServerConfigurationManager>();
         cfg.Setup(c => c.GetConfiguration("network")).Returns(() => _net);
@@ -44,7 +58,12 @@ public sealed class AdminControllerTests : IDisposable
         Rebuild();
     }
 
-    public void Dispose() => _queue.Dispose();
+    public void Dispose()
+    {
+        _queue.Dispose();
+        _store.Dispose();
+        Directory.Delete(_dir, true);
+    }
 
     [Fact]
     public void GetConfig_BlanksSecrets()
@@ -108,8 +127,43 @@ public sealed class AdminControllerTests : IDisposable
     }
 
     [Fact]
+    public void SetConfig_TrimsSmtpUsername()
+    {
+        _controller.SetConfig(new AdminConfigRequest { SmtpUsername = "  user@example.org \n" });
+
+        Assert.Equal("user@example.org", _config.SmtpUsername);
+    }
+
+    [Fact]
+    public void SetConfig_ClearSmtpPassword_EmptiesIt()
+    {
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { ClearSmtpPassword = true }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal(string.Empty, _config.SmtpPassword);
+        Assert.Equal("seerr-secret", _config.SeerrApiKey);
+    }
+
+    [Fact]
+    public void SetConfig_EmptyPassword_KeepsIt()
+    {
+        _controller.SetConfig(new AdminConfigRequest { SmtpPassword = string.Empty, ClearSmtpPassword = false });
+
+        Assert.Equal("smtp-secret", _config.SmtpPassword);
+    }
+
+    [Fact]
+    public void SetConfig_ClearWithNewPassword_KeepsTheNewOne()
+    {
+        _controller.SetConfig(new AdminConfigRequest { SmtpPassword = "new-fake", ClearSmtpPassword = true });
+
+        Assert.Equal("new-fake", _config.SmtpPassword);
+    }
+
+    [Fact]
     public void PostConfig_EmptySecret_KeepsStored()
     {
+        _config.SmtpHost = "smtp.example";
         var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "smtp.example", SmtpPassword = string.Empty, SeerrApiKey = string.Empty }));
 
         Assert.Equal(200, result.StatusCode);
@@ -123,6 +177,158 @@ public sealed class AdminControllerTests : IDisposable
         Assert.Equal("newkey", _config.SeerrApiKey);
     }
 
+    [Fact]
+    public void SetConfig_SmtpHostChanges_WithoutPassword_IsRefused_AndNothingIsStored()
+    {
+        _config.SmtpHost = "smtp.example";
+        var before = JsonSerializer.Serialize(_config);
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "other.example", PinMinutes = 33 }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Contains("smtp_server_changed", result.Content!, StringComparison.Ordinal);
+        Assert.Equal(before, JsonSerializer.Serialize(_config));
+        Assert.Equal(0, _saves);
+    }
+
+    [Fact]
+    public void SetConfig_SmtpHostChanges_WithANewPassword_IsSaved()
+    {
+        _config.SmtpHost = "smtp.example";
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "other.example", SmtpPassword = "typed-again" }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal("other.example", _config.SmtpHost);
+        Assert.Equal("typed-again", _config.SmtpPassword);
+    }
+
+    [Fact]
+    public void SetConfig_SmtpHostChanges_WithClear_IsSavedWithoutPassword()
+    {
+        _config.SmtpHost = "smtp.example";
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "other.example", ClearSmtpPassword = true }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal("other.example", _config.SmtpHost);
+        Assert.Equal(string.Empty, _config.SmtpPassword);
+    }
+
+    [Theory]
+    [InlineData("SMTP.Example")]
+    [InlineData("  smtp.example  ")]
+    public void SetConfig_SmtpHostCaseOrSpaceOnlyChange_IsSaved_AndThePasswordIsKept(string host)
+    {
+        _config.SmtpHost = "smtp.example";
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = host, SmtpPort = 465 }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal("smtp-secret", _config.SmtpPassword);
+        Assert.Equal(465, _config.SmtpPort);
+    }
+
+    [Fact]
+    public void SetConfig_SmtpHostChanges_WithNoStoredPassword_IsSaved()
+    {
+        _config.SmtpHost = "smtp.example";
+        _config.SmtpPassword = string.Empty;
+
+        Assert.Equal(200, Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "other.example" })).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("https://other.example/", true)]
+    [InlineData("http://seerr.example/", true)]
+    [InlineData("https://seerr.example:8443/", true)]
+    [InlineData("https://seerr.example/sub/path", false)]
+    [InlineData("HTTPS://SEERR.example/", false)]
+    public void SetConfig_SeerrAddressChanges_WithoutKey_IsRefusedOnlyWhenSchemeHostOrPortChange(string url, bool refused)
+    {
+        _config.SeerrUrl = "https://seerr.example/";
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SeerrUrl = url }));
+
+        if (refused)
+        {
+            Assert.Equal(400, result.StatusCode);
+            Assert.Contains("seerr_address_changed", result.Content!, StringComparison.Ordinal);
+            Assert.Equal("https://seerr.example/", _config.SeerrUrl);
+        }
+        else
+        {
+            Assert.Equal(200, result.StatusCode);
+            Assert.Equal("seerr-secret", _config.SeerrApiKey);
+        }
+    }
+
+    [Fact]
+    public void SetConfig_SeerrAddressChanges_WithAKey_IsSaved()
+    {
+        _config.SeerrUrl = "https://seerr.example/";
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SeerrUrl = "https://other.example/", SeerrApiKey = "typed-again" }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal("typed-again", _config.SeerrApiKey);
+    }
+
+    [Theory]
+    [InlineData("StartTls", "None", null, false, false, "smtp_encryption_off")]
+    [InlineData("SslOnConnect", "None", null, false, false, "smtp_encryption_off")]
+    [InlineData("StartTls", "None", "typed-again", false, true, null)]
+    [InlineData("StartTls", "None", null, true, true, null)]
+    [InlineData("None", "None", null, false, true, null)]
+    [InlineData("StartTls", "SslOnConnect", null, false, true, null)]
+    [InlineData("None", "StartTls", null, false, true, null)]
+    public void SetConfig_SmtpSecurityChanges_AsksForThePasswordAgainOnlyWhenEncryptionIsTurnedOff(string stored, string posted, string? password, bool clear, bool saved, string? code)
+    {
+        _config.SmtpSecurity = Enum.Parse<SmtpSecurity>(stored);
+        var before = JsonSerializer.Serialize(_config);
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpSecurity = posted, SmtpPassword = password, ClearSmtpPassword = clear ? true : null, PinMinutes = 33 }));
+
+        if (saved)
+        {
+            Assert.Equal(200, result.StatusCode);
+            Assert.Equal(Enum.Parse<SmtpSecurity>(posted), _config.SmtpSecurity);
+            Assert.Equal(33, _config.PinMinutes);
+            Assert.Equal(clear ? string.Empty : password ?? "smtp-secret", _config.SmtpPassword);
+        }
+        else
+        {
+            Assert.Equal(400, result.StatusCode);
+            Assert.Contains(code!, result.Content!, StringComparison.Ordinal);
+            Assert.Equal(before, JsonSerializer.Serialize(_config));
+            Assert.Equal(0, _saves);
+        }
+    }
+
+    [Fact]
+    public void SetConfig_SmtpSecurityTurnedOff_WithNoStoredPassword_IsSaved()
+    {
+        _config.SmtpSecurity = SmtpSecurity.StartTls;
+        _config.SmtpPassword = string.Empty;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpSecurity = "None" }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal(SmtpSecurity.None, _config.SmtpSecurity);
+    }
+
+    [Fact]
+    public void SetConfig_HostChangedAndEncryptionTurnedOff_GivesTheHostCode()
+    {
+        _config.SmtpHost = "smtp.example";
+        _config.SmtpSecurity = SmtpSecurity.StartTls;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "other.example", SmtpSecurity = "None" }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Contains("smtp_server_changed", result.Content!, StringComparison.Ordinal);
+    }
+
     private static readonly JsonSerializerOptions BinderJson = new(JsonSerializerDefaults.Web);
 
     [Theory]
@@ -132,6 +338,9 @@ public sealed class AdminControllerTests : IDisposable
     {
         // The body goes through the same JSON deserialization as the MVC binder (camelCase, case-insensitive).
         var request = JsonSerializer.Deserialize<AdminConfigRequest>(json, BinderJson);
+        _config.SmtpHost = "x";
+        _config.SmtpSecurity = SmtpSecurity.None;
+        _config.SeerrUrl = "https://seerr.example";
         _config.Enabled = true;
         _config.NativeForgotPassword = true;
         _config.AllowAdministrators = true;
@@ -154,6 +363,7 @@ public sealed class AdminControllerTests : IDisposable
         _config.SeerrEnabled = true;
         _config.SeerrUrl = "https://seerr.example";
         _config.TemplateOverrides["fr/invitation.html"] = "custom";
+        _config.SmtpHost = "x";
 
         var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "x" }));
 
@@ -303,9 +513,215 @@ public sealed class AdminControllerTests : IDisposable
     }
 
     [Fact]
-    public void Status_ReportsCodeNotSentence()
+    public async Task Status_ReportsServiceOpen()
     {
-        var ok = JsonDocument.Parse(Assert.IsType<ContentResult>(_controller.Status()).Content!).RootElement;
+        Assert.True((await StatusRoot()).GetProperty("serviceOpen").GetBoolean());
+
+        _config.Enabled = false;
+        Assert.False((await StatusRoot()).GetProperty("serviceOpen").GetBoolean());
+
+        _config.Enabled = true;
+        var ctx = new DefaultHttpContext();
+        ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.0.0.2");
+        ctx.Request.Headers["X-Forwarded-For"] = "203.0.113.5";
+        _guard.Observe(ctx);
+        Assert.False((await StatusRoot()).GetProperty("serviceOpen").GetBoolean());
+    }
+
+    [Fact]
+    public void GetConfig_ReturnsEmailLogin()
+    {
+        _config.EmailLogin = true;
+
+        var root = JsonDocument.Parse(Assert.IsType<ContentResult>(_controller.GetConfig()).Content!).RootElement;
+
+        Assert.True(root.GetProperty("emailLogin").GetBoolean());
+    }
+
+    [Fact]
+    public void SetConfig_SavesEmailLogin()
+    {
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { EmailLogin = true }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.True(_config.EmailLogin);
+        Assert.Equal(1, _saves);
+
+        _controller.SetConfig(new AdminConfigRequest { EmailLogin = false });
+        Assert.False(_config.EmailLogin);
+    }
+
+    [Fact]
+    public void SetConfig_WithoutEmailLogin_KeepsIt()
+    {
+        _config.EmailLogin = true;
+
+        _controller.SetConfig(new AdminConfigRequest { SmtpHost = "smtp.example" });
+
+        Assert.True(_config.EmailLogin);
+    }
+
+    [Fact]
+    public async Task Status_CountsSharedConfirmedAddresses()
+    {
+        var when = new DateTime(2026, 10, 31, 12, 0, 0, DateTimeKind.Utc);
+        await _store.WriteAsync(d =>
+        {
+            // Two accounts on one confirmed address (case differs): counts once.
+            d.Emails.Add(new UserEmail(Guid.NewGuid(), "shared@example.org", null, "en", when));
+            d.Emails.Add(new UserEmail(Guid.NewGuid(), "Shared@Example.org", null, "en", when));
+
+            // A pending duplicate elsewhere, an unconfirmed address and a single owner: none counts.
+            d.Emails.Add(new UserEmail(Guid.NewGuid(), "alone@example.org", "shared@example.org", "en", when));
+            d.Emails.Add(new UserEmail(Guid.NewGuid(), null, "alone@example.org", "en", null));
+            d.Emails.Add(new UserEmail(Guid.NewGuid(), "unconfirmed@example.org", null, "en", null));
+            d.Emails.Add(new UserEmail(Guid.NewGuid(), "unconfirmed@example.org", null, "en", null));
+        });
+
+        var root = await StatusRoot();
+
+        Assert.Equal(1, root.GetProperty("sharedEmailCount").GetInt32());
+        Assert.DoesNotContain("example.org", root.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Status_ReportsEmailLoginAvailability()
+    {
+        Assert.True((await StatusRoot()).GetProperty("emailLoginAvailable").GetBoolean());
+
+        _probe = Probe(available: false);
+        Rebuild();
+
+        Assert.False((await StatusRoot()).GetProperty("emailLoginAvailable").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Status_CountsNothing_WhenNoOneSharesAnAddress()
+    {
+        Assert.Equal(0, (await StatusRoot()).GetProperty("sharedEmailCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task Status_StoreReadFails_ReportsNoSharedAddress_AndTheRestIntact()
+    {
+        // An unreadable data file: the store read throws.
+        await File.WriteAllTextAsync(Path.Combine(_dir, "mailconcierge.json"), "{\"Emails\":[{\"Email\":\"alice@example.org\"", TestContext.Current.CancellationToken);
+        var logger = new ListLogger();
+        _controller = new AdminController(_users.Object, _queue, _guard, new ServiceGate(() => _config, _guard), NewEmailService(_queue), _probe, () => _config, _ => _saves++, logger)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+        };
+
+        var result = Assert.IsType<ContentResult>(await _controller.Status());
+
+        Assert.Equal(StatusCodes.Status200OK, result.StatusCode);
+        var root = JsonDocument.Parse(result.Content!).RootElement;
+        Assert.Equal(0, root.GetProperty("sharedEmailCount").GetInt32());
+        Assert.Equal(0, root.GetProperty("sharedEmailAccounts").GetArrayLength());
+        Assert.False(root.GetProperty("proxyGuardTripped").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("reason").ValueKind);
+        Assert.Equal(_config.CanSendEmail(), root.GetProperty("canSendEmail").GetBoolean());
+        Assert.True(root.GetProperty("serviceOpen").GetBoolean());
+        Assert.True(root.GetProperty("emailLoginAvailable").GetBoolean());
+        var line = Assert.Single(logger.Lines);
+        Assert.Contains(nameof(JsonException), line, StringComparison.Ordinal);
+        Assert.DoesNotContain("example.org", line, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("alice", line, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Status_NamesTheAccountsOfEachSharedAddress_SortedAndWithoutAnyAddress()
+    {
+        var when = new DateTime(2026, 10, 31, 12, 0, 0, DateTimeKind.Utc);
+        var zoe = KnownAccount("Zoe");
+        var bob = KnownAccount("bob");
+        var alice = KnownAccount("Alice");
+        var carol = KnownAccount("carol");
+        var dave = KnownAccount("dave");
+        await _store.WriteAsync(d =>
+        {
+            d.Emails.Add(new UserEmail(zoe, "one@example.org", null, "en", when));
+            d.Emails.Add(new UserEmail(bob, "ONE@example.org", null, "en", when));
+            d.Emails.Add(new UserEmail(carol, "two@example.org", null, "en", when));
+            d.Emails.Add(new UserEmail(alice, "two@example.org", null, "en", when));
+            d.Emails.Add(new UserEmail(dave, "alone@example.org", null, "en", when));
+        });
+
+        var root = await StatusRoot();
+
+        Assert.Equal(2, root.GetProperty("sharedEmailCount").GetInt32());
+        var groups = root.GetProperty("sharedEmailAccounts").EnumerateArray().Select(g => g.EnumerateArray().Select(n => n.GetString()).ToArray()).ToArray();
+        Assert.Equal(new[] { new[] { "Alice", "carol" }, new[] { "bob", "Zoe" } }, groups);
+        Assert.DoesNotContain("example.org", root.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Status_CapsTheSharedAccountsAtTwentyEntriesAndTenNames_AndKeepsTheFullCount()
+    {
+        var when = new DateTime(2026, 10, 31, 12, 0, 0, DateTimeKind.Utc);
+        await _store.WriteAsync(d =>
+        {
+            for (var g = 0; g < 25; g++)
+            {
+                for (var n = 0; n < 12; n++)
+                {
+                    d.Emails.Add(new UserEmail(KnownAccount($"g{g:D2}n{n:D2}"), $"shared{g}@example.org", null, "en", when));
+                }
+            }
+        });
+
+        var root = await StatusRoot();
+
+        Assert.Equal(25, root.GetProperty("sharedEmailCount").GetInt32());
+        var groups = root.GetProperty("sharedEmailAccounts").EnumerateArray().ToArray();
+        Assert.Equal(20, groups.Length);
+        Assert.All(groups, g => Assert.Equal(10, g.GetArrayLength()));
+        Assert.Equal("g00n00", groups[0][0].GetString());
+        Assert.Equal("g19n09", groups[19][9].GetString());
+    }
+
+    [Fact]
+    public async Task Status_LeavesOutAnIdWithoutAnAccount()
+    {
+        var when = new DateTime(2026, 10, 31, 12, 0, 0, DateTimeKind.Utc);
+        var alice = KnownAccount("alice");
+        var bob = KnownAccount("bob");
+        await _store.WriteAsync(d =>
+        {
+            d.Emails.Add(new UserEmail(alice, "one@example.org", null, "en", when));
+            d.Emails.Add(new UserEmail(Guid.NewGuid(), "one@example.org", null, "en", when));
+            d.Emails.Add(new UserEmail(bob, "one@example.org", null, "en", when));
+        });
+
+        var root = await StatusRoot();
+
+        Assert.Equal(1, root.GetProperty("sharedEmailCount").GetInt32());
+        var entry = Assert.Single(root.GetProperty("sharedEmailAccounts").EnumerateArray());
+        Assert.Equal(new[] { "alice", "bob" }, entry.EnumerateArray().Select(n => n.GetString()).ToArray());
+    }
+
+    [Fact]
+    public async Task Status_NoSharedAddress_GivesAnEmptyAccountList()
+    {
+        var root = await StatusRoot();
+
+        Assert.Equal(JsonValueKind.Array, root.GetProperty("sharedEmailAccounts").ValueKind);
+        Assert.Equal(0, root.GetProperty("sharedEmailAccounts").GetArrayLength());
+    }
+
+    private Guid KnownAccount(string name)
+    {
+        var user = new User(name, AccountPolicy.DefaultAuthProviderId, "reset") { Id = Guid.NewGuid() };
+        _users.Setup(u => u.GetUserById(user.Id)).Returns(user);
+        return user.Id;
+    }
+
+    private async Task<JsonElement> StatusRoot() => JsonDocument.Parse(Assert.IsType<ContentResult>(await _controller.Status()).Content!).RootElement;
+
+    [Fact]
+    public async Task Status_ReportsCodeNotSentence()
+    {
+        var ok = await StatusRoot();
         Assert.False(ok.GetProperty("proxyGuardTripped").GetBoolean());
         Assert.Equal(JsonValueKind.Null, ok.GetProperty("reason").ValueKind);
 
@@ -314,7 +730,7 @@ public sealed class AdminControllerTests : IDisposable
         ctx.Request.Headers["X-Forwarded-For"] = "203.0.113.5";
         _guard.Observe(ctx);
 
-        var tripped = JsonDocument.Parse(Assert.IsType<ContentResult>(_controller.Status()).Content!).RootElement;
+        var tripped = await StatusRoot();
         Assert.True(tripped.GetProperty("proxyGuardTripped").GetBoolean());
         Assert.Equal("unknown_proxy", tripped.GetProperty("reason").GetString());
     }
@@ -340,7 +756,7 @@ public sealed class AdminControllerTests : IDisposable
         var queue = new EmailQueue(() => _config, transport.Object, new RateLimiter(_time), NullLogger<EmailQueue>.Instance, _time);
         var logger = new Mock<Microsoft.Extensions.Logging.ILogger<AdminController>>();
         logger.Setup(l => l.IsEnabled(It.IsAny<Microsoft.Extensions.Logging.LogLevel>())).Returns(true);
-        var controller = new AdminController(_users.Object, queue, _guard, () => _config, _ => { }, logger.Object)
+        var controller = new AdminController(_users.Object, queue, _guard, new ServiceGate(() => _config, _guard), NewEmailService(queue), _probe, () => _config, _ => { }, logger.Object)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
@@ -362,6 +778,24 @@ public sealed class AdminControllerTests : IDisposable
             Times.Once);
     }
 
+    private static EmailLoginProbe Probe(bool available)
+    {
+        var actions = available
+            ? new[]
+            {
+                new ControllerActionDescriptor
+                {
+                    ControllerName = EmailLoginProbe.ControllerName,
+                    ActionName = EmailLoginProbe.ActionName,
+                    Parameters = new List<ParameterDescriptor> { new() { Name = "request", ParameterType = typeof(SignInRequest) } },
+                },
+            }
+            : Array.Empty<ControllerActionDescriptor>();
+        var provider = new Mock<IActionDescriptorCollectionProvider>();
+        provider.SetupGet(p => p.ActionDescriptors).Returns(new ActionDescriptorCollection(actions, 1));
+        return new EmailLoginProbe(provider.Object);
+    }
+
     private static User NewUser(string name, string provider, bool admin)
     {
         var user = new User(name, provider, "Jellyfin.Server.Implementations.Users.DefaultPasswordResetProvider");
@@ -369,11 +803,59 @@ public sealed class AdminControllerTests : IDisposable
         return user;
     }
 
+    private EmailService NewEmailService(EmailQueue queue) => new(
+        _store,
+        new TokenService(_dir),
+        new RateLimiter(_time),
+        queue,
+        _users.Object,
+        new SessionCloser(Mock.Of<IDeviceManager>(), Mock.Of<ISessionManager>(), _time, NullLogger<SessionCloser>.Instance),
+        Mock.Of<ISeerrSync>(),
+        Mock.Of<IServerApplicationHost>(),
+        () => _config,
+        new ServiceGate(() => _config, _guard),
+        _time,
+        NullLogger<EmailService>.Instance);
+
     private void Rebuild()
     {
-        _controller = new AdminController(_users.Object, _queue, _guard, () => _config, _ => _saves++, NullLogger<AdminController>.Instance)
+        _controller = new AdminController(_users.Object, _queue, _guard, new ServiceGate(() => _config, _guard), NewEmailService(_queue), _probe, () => _config, _ => _saves++, NullLogger<AdminController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
+    }
+
+    public sealed class SignInRequest
+    {
+        public string? Username { get; set; }
+    }
+
+    private sealed class ListLogger : ILogger<AdminController>
+    {
+        private readonly List<string> _lines = new();
+
+        public IReadOnlyList<string> Lines
+        {
+            get
+            {
+                lock (_lines)
+                {
+                    return _lines.ToList();
+                }
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (_lines)
+            {
+                _lines.Add(formatter(state, exception) + " " + exception);
+            }
+        }
     }
 }

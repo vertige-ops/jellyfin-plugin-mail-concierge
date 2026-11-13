@@ -2,21 +2,22 @@
 
 # Mail Concierge
 
-A Jellyfin 12.1 plugin that adds e-mail invitations and e-mail password recovery, without patching Jellyfin. E-mail is the only channel: there is no SMS, chat or push notification, and none is planned.
+A Jellyfin 12.4 plugin that adds e-mail invitations, e-mail password recovery and sign-in with the confirmed e-mail address, without patching Jellyfin. E-mail is the only channel: there is no SMS, chat or push notification, and none is planned.
 
-- **Invitations**: an administrator invites someone (with an optional e-mail address, libraries and validity). The invitee creates their own account on a public Mail Concierge page. Invited accounts are never administrators.
-- **Password recovery by e-mail**: the native "Forgot password" button sends a PIN and a single-use link by e-mail. The PIN never becomes the password.
+- **Invitations**: an administrator invites someone (with an optional e-mail address, libraries and validity). The invitee creates their own account on a public Mail Concierge page. Invited accounts are never administrators. The list keeps the history of the invitations; any line can be erased from it.
+- **Password recovery by e-mail**: the native "Forgot password" button sends a PIN and a single-use link by e-mail; the person types their user name or confirmed e-mail address. The PIN never becomes the password.
 - **E-mail in the profile**: users set their address in their profile (with confirmation); administrators can set it for anyone.
+- **Sign in with your e-mail address** (optional, off by default): users can type their confirmed address in place of the user name. Jellyfin still checks the password.
 - **Seerr** (optional): confirmed addresses are copied one-way to the matching Seerr account.
 
 ## Quick start
 
 ### Requirements
 
-- Jellyfin **12.1**.
+- Jellyfin 12.4 and later 12.x (tested on 12.4 only); see the compatibility table under [Tested with](#tested-with).
 - A working **SMTP** account (host, port, STARTTLS/SSL, credentials).
 - The **public URL** of your server, set in the plugin settings. No e-mail is sent until it is set: links are never built from the incoming request.
-- Behind a reverse proxy, **Known Proxies** must be set in Jellyfin (Dashboard, Networking). Mail Concierge refuses to activate when it sees private-IP requests carrying `X-Forwarded-For` while no proxy is declared, and says so in its settings.
+- Behind a reverse proxy, **Known Proxies** must be set in Jellyfin (Dashboard, Networking). Mail Concierge refuses to activate when it sees requests from a private or shared (100.64.0.0/10) address carrying `X-Forwarded-For` while no proxy is declared, and says so in its settings. A proxy that reaches Jellyfin from a public address is not detected: declare it in Known Proxies. Until then, any client on a private or shared-range network (VPN overlay peers included) can close the plugin's public pages, its sending paths (recovery, invitations and e-mail changes) and sign-in by e-mail address for everybody by sending such a header.
 
 ### Installation
 
@@ -63,7 +64,7 @@ Taken on a demo server with fictitious users and addresses.
 
 ## Why Mail Concierge / Alternatives
 
-Mail Concierge runs inside Jellyfin as a plugin: there is no extra service to deploy, no second user database to keep in sync, and accounts, sessions and password policy stay Jellyfin's own. The price is that it only works with Jellyfin 12.1 and its web client, and that it depends on how Jellyfin loads plugins.
+Mail Concierge runs inside Jellyfin as a plugin: there is no extra service to deploy, no second user database to keep in sync, and accounts, sessions and password policy stay Jellyfin's own. The price is that it only works with the Jellyfin version it is built for and its web client, and that it depends on how Jellyfin loads plugins.
 
 Other tools cover similar needs from the outside, as separate services (this summary is from their public descriptions, not from tests; check their documentation for current features):
 
@@ -92,13 +93,18 @@ English, French, Spanish and German are included (the Spanish and German texts a
 
 ## Roadmap
 
-Planned work (12.0.x fixes, 12.1, later releases) is in [docs/roadmap.md](docs/roadmap.md). It is a plan, not a promise.
+Planned work (12.4.0.x fixes, later releases) is in [docs/roadmap.md](docs/roadmap.md). It is a plan, not a promise.
 
 ## Tested with
 
-- Jellyfin **12.1** (`targetAbi` 12.1.0.0), built with the NuGet packages `Jellyfin.Controller` and `Jellyfin.Model` 12.1.0.
-- .NET **10** SDK: `dotnet build -c Release` (0 warnings) and `dotnet test` (402 tests) pass. The web client tests use Node 22 and jsdom.
+- Jellyfin **12.4** (`targetAbi` 12.4.0.0). Built with the NuGet packages `Jellyfin.Controller` and `Jellyfin.Model` 12.4.0.
+- .NET **10** SDK: `dotnet build -c Release` (0 warnings) and `dotnet test` pass. The web client tests use Node 22 and jsdom.
 - Not verified here: other Jellyfin versions, specific reverse proxies, and specific Seerr versions.
+
+| Plugin version | Jellyfin version |
+| --- | --- |
+| 12.4.0.0 | Jellyfin 12.4 and later 12.x (tested on 12.4 only) |
+| 12.0.0.0 | Jellyfin 12.1 to 12.3 |
 
 ## Build
 
@@ -113,18 +119,18 @@ To produce the plugin zip locally (needs [jprm](https://github.com/oddstr13/jell
 
 ```shell
 pip install jprm
-jprm plugin build . --output artifacts   # artifacts/mail-concierge_12.0.0.0.zip
+jprm plugin build . --output artifacts   # artifacts/mail-concierge_12.4.0.0.zip
 ```
 
 `jprm plugin build` rewrites the version in `Directory.Build.props` to the one in `build.yaml` (or to the `--version` you pass).
 
 ## Versioning
 
-`<Jellyfin major>.<release>.<fix>.0`, the scheme used by [Jellyfin Enhanced](https://github.com/n00bcodr/Jellyfin-Enhanced): the first number is the major Jellyfin version the release is built for (`12.0.0.0` for Jellyfin 12), the second grows with each feature release, the third with each fix. Each release is built for one `targetAbi`; a new Jellyfin major version starts a new series (`13.0.0.0`) and the older series stay available in the catalogue for older servers.
+`<Jellyfin major>.<Jellyfin minor>.<plugin release>.<fix>`, derived from the scheme used by [Jellyfin Enhanced](https://github.com/n00bcodr/Jellyfin-Enhanced): the first two numbers are the Jellyfin version the release is built for (`12.4` for Jellyfin 12.4), the third grows with each feature release on that Jellyfin version, the fourth with each fix. The next feature release on Jellyfin 12.4 is `12.4.1.0`; a fix to it is `12.4.1.1`. Each release is built for one `targetAbi`; a release built for a newer Jellyfin version starts a new series (`12.5.0.0`, `13.0.0.0`), and the older series stay in the catalogue for older servers. `12.0.0.0`, built for Jellyfin 12.1, predates this rule.
 
 ## Release
 
-Pushing a tag `v*` (for example `v12.0.0.0`) runs `.github/workflows/publish.yaml`: it builds the zip with jprm (renamed `Jellyfin.Plugin.MailConcierge_<targetAbi>.zip` without the last `.0`, for example `…_12.1.0.zip`), creates the GitHub release with the zip, adds the version (MD5 checksum, release asset `sourceUrl`, timestamp) to `manifest.json` and commits it to `main`. The build comes from the pushed tag, and the **tag drives the version** (`--version`), so `version` in `build.yaml` is only the default for local builds. Add a section for the version to `CHANGELOG.md` before tagging: only that section is used as the release notes.
+Pushing a tag `v*` (for example `v12.4.0.0`) runs `.github/workflows/publish.yaml`: it builds the zip with jprm (renamed `Jellyfin.Plugin.MailConcierge_<targetAbi>.zip` without the last `.0`, for example `…_12.4.0.zip`), creates the GitHub release with the zip, adds the version (MD5 checksum, release asset `sourceUrl`, timestamp) to `manifest.json` and commits it to `main`. The build comes from the pushed tag, and the **tag drives the version** (`--version`), so `version` in `build.yaml` is only the default for local builds. Add a section for the version to `CHANGELOG.md` before tagging: only that section is used as the release notes.
 
 ## License
 

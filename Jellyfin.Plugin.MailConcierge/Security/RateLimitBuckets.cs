@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+
 namespace Jellyfin.Plugin.MailConcierge.Security;
 
 /// <summary>
@@ -34,4 +36,18 @@ public static class RateLimitBuckets
 
     /// <summary>Wrong current-password attempts per user, shared by every Mail Concierge form that checks the password.</summary>
     public const string PasswordFailUser = "password-fail-user";
+
+    /// <summary>Public page views per client address, shared by the four pages.</summary>
+    public const string PageViewIp = "page-view-ip";
+
+    // The buckets whose key is a client address (every call site passes the client key), and only those.
+    private static readonly FrozenSet<string> PerClientAddress = FrozenSet.Create(ForgotIp, PinFailIp, TokenFailIp, PageViewIp);
+
+    /// <summary>
+    /// Tells whether the keys of a bucket are client addresses. Such entries are evicted first when the limiter is full, so that a
+    /// flood of distinct client addresses cannot make it forget the server-wide and per-account budgets.
+    /// </summary>
+    /// <param name="bucket">The bucket name.</param>
+    /// <returns>True for a bucket keyed by client address.</returns>
+    internal static bool IsPerClientAddress(string bucket) => PerClientAddress.Contains(bucket);
 }
