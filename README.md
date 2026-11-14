@@ -93,7 +93,7 @@ English, French, Spanish and German are included (the Spanish and German texts a
 
 ## Roadmap
 
-Planned work (12.4.0.x fixes, later releases) is in [docs/roadmap.md](docs/roadmap.md). It is a plan, not a promise.
+How the plugin fits into Jellyfin and what it depends on: [docs/architecture.md](docs/architecture.md). Planned work is in [docs/roadmap.md](docs/roadmap.md). It is a plan, not a promise.
 
 ## Tested with
 

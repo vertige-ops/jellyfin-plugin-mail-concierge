@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 600" width="980" height="600" role="img" aria-labelledby="t d">
+  <title id="t">Mail Concierge inside Jellyfin</title>
+  <desc id="d">The plugin runs inside the Jellyfin 12.4 server. An administrator, the Jellyfin apps and invited users talk to its web layer. It sends its e-mails to an SMTP server and, optionally, copies confirmed addresses to Seerr. It reaches accounts and sessions only through Jellyfin's own APIs.</desc>
+  <defs>
+    <style>
+      text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1b2326; }
+      .bg { fill: #ffffff; stroke: #c4cdd0; stroke-width: 1; }
+      .host { fill: none; stroke: #56646a; stroke-width: 1.5; }
+      .plugin { fill: #dcefed; stroke: #0b6e69; stroke-width: 1.5; }
+      .row { fill: #ffffff; stroke: #0b6e69; stroke-width: 1; }
+      .strip { fill: #ffffff; stroke: #56646a; stroke-width: 1; }
+      .ext { fill: #ffffff; stroke: #6f7d82; stroke-width: 1.5; stroke-dasharray: 5 4; }
+      .arrow { fill: none; stroke: #1b2326; stroke-width: 1.4; }
+      .ttl { font-size: 13px; font-weight: 600; }
+      .cap { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; fill: #0b6e69; }
+      .capm { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; fill: #56646a; }
+      .txt { font-size: 12px; }
+      .sub { font-size: 11.5px; fill: #56646a; }
+      .lbl { font-size: 11px; fill: #56646a; font-family: ui-monospace, Menlo, Consolas, monospace; }
+    </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <polygon points="0,1 10,5 0,9" fill="#1b2326"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0.5" y="0.5" width="979" height="599" rx="4"/>
+
+  <rect class="host" x="250" y="16" width="480" height="568" rx="4"/>
+  <text class="capm" x="266" y="38">JELLYFIN SERVER 12.4</text>
+
+  <rect class="plugin" x="270" y="52" width="440" height="382" rx="4"/>
+  <text class="ttl" x="286" y="76">Mail Concierge</text>
+  <text class="sub" x="694" y="76" text-anchor="end">4 DLLs shipped</text>
+
+  <rect class="row" x="286" y="88" width="408" height="70" rx="2"/>
+  <text class="cap" x="298" y="106">WEB</text>
+  <text class="txt" x="298" y="124">Public pages · Administration API</text>
+  <text class="txt" x="298" y="142">Filters (sign-in, forgot password) · injected script</text>
+
+  <rect class="row" x="286" y="168" width="408" height="70" rx="2"/>
+  <text class="cap" x="298" y="186">SERVICES</text>
+  <text class="txt" x="298" y="204">Invitations · Recovery · E-mail addresses</text>
+  <text class="txt" x="298" y="222">Sign-in by address · Copy to Seerr</text>
+
+  <rect class="row" x="286" y="248" width="408" height="70" rx="2"/>
+  <text class="cap" x="298" y="266">SECURITY</text>
+  <text class="txt" x="298" y="284">Hashed tokens · Rate limits</text>
+  <text class="txt" x="298" y="302">Proxy guard · Master switch</text>
+
+  <rect class="row" x="286" y="328" width="408" height="96" rx="2"/>
+  <text class="cap" x="298" y="346">DATA AND SENDING</text>
+  <rect class="row" x="298" y="356" width="180" height="56" rx="2"/>
+  <text class="txt" x="308" y="376">JSON store</text>
+  <text class="sub" x="308" y="394">addresses, tokens, invitations</text>
+  <rect class="row" x="498" y="356" width="184" height="56" rx="2"/>
+  <text class="txt" x="508" y="376">E-mail queue</text>
+  <text class="sub" x="508" y="394">MailKit · MimeKit</text>
+
+  <line class="arrow" x1="490" y1="434" x2="490" y2="450" marker-end="url(#arr)"/>
+  <rect class="strip" x="270" y="450" width="440" height="118" rx="2"/>
+  <text class="capm" x="286" y="470">JELLYFIN APIS USED (PROVIDED BY THE SERVER)</text>
+  <text class="txt" x="286" y="492">IUserManager: create, read, disable accounts</text>
+  <text class="txt" x="286" y="510">ISessionManager, IDeviceManager: close sessions</text>
+  <text class="txt" x="286" y="528">IPasswordResetProvider: “Forgot password”</text>
+  <text class="txt" x="286" y="546">MVC filters · startup filter · scheduled task</text>
+
+  <rect class="ext" x="16" y="40" width="180" height="80" rx="2"/>
+  <text class="ttl" x="28" y="70">Administrator</text>
+  <text class="sub" x="28" y="88">settings, invitations,</text>
+  <text class="sub" x="28" y="104">test e-mail</text>
+
+  <rect class="ext" x="16" y="150" width="180" height="80" rx="2"/>
+  <text class="ttl" x="28" y="180">Jellyfin app</text>
+  <text class="sub" x="28" y="198">sign-in, “Forgot password”</text>
+  <text class="sub" x="28" y="214">(web, TV, mobile)</text>
+
+  <rect class="ext" x="16" y="260" width="180" height="80" rx="2"/>
+  <text class="ttl" x="28" y="290">Invitee or user</text>
+  <text class="sub" x="28" y="308">public pages:</text>
+  <text class="sub" x="28" y="324">link or code received</text>
+
+  <polyline class="arrow" points="196,80 214,80 214,100 286,100" marker-end="url(#arr)"/>
+  <polyline class="arrow" points="196,190 224,190 224,123 286,123" marker-end="url(#arr)"/>
+  <polyline class="arrow" points="196,300 234,300 234,146 286,146" marker-end="url(#arr)"/>
+
+  <rect class="ext" x="790" y="170" width="180" height="78" rx="2"/>
+  <text class="ttl" x="802" y="200">Seerr</text>
+  <text class="sub" x="802" y="218">optional: copies</text>
+  <text class="sub" x="802" y="234">confirmed addresses</text>
+  <line class="arrow" x1="694" y1="209" x2="790" y2="209" marker-end="url(#arr)"/>
+  <text class="lbl" x="700" y="200">HTTP</text>
+
+  <rect class="ext" x="790" y="340" width="180" height="80" rx="2"/>
+  <text class="ttl" x="802" y="370">SMTP server</text>
+  <text class="sub" x="802" y="388">relay chosen by</text>
+  <text class="sub" x="802" y="404">the administrator</text>
+  <line class="arrow" x1="682" y1="384" x2="790" y2="384" marker-end="url(#arr)"/>
+  <text class="lbl" x="706" y="375">SMTP, TLS</text>
+
+  <rect class="ext" x="790" y="460" width="180" height="70" rx="2"/>
+  <text class="ttl" x="802" y="490">E-mail inbox</text>
+  <text class="sub" x="802" y="508">link and code arrive here</text>
+  <line class="arrow" x1="880" y1="420" x2="880" y2="460" marker-end="url(#arr)"/>
+  <text class="lbl" x="890" y="444">delivery</text>
+</svg>
