@@ -1,0 +1,50 @@
+name: Compatibility report
+description: Tell us how Mail Concierge behaves on your setup (it works, or it does not)
+labels: [compatibility]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Mail Concierge is tested on Jellyfin 12.4 only. Reports from other setups are very welcome, including when everything works.
+        Remove every secret (tokens, passwords, API keys, full invitation or reset links) from what you paste.
+  - type: input
+    id: jellyfin
+    attributes:
+      label: Jellyfin version
+      placeholder: "12.4.0"
+    validations:
+      required: true
+  - type: input
+    id: mailconcierge
+    attributes:
+      label: Mail Concierge version
+      placeholder: "12.4.0.0"
+    validations:
+      required: true
+  - type: input
+    id: setup
+    attributes:
+      label: Setup
+      description: Installation type (Docker, package, ...), reverse proxy, and whether Known Proxies is set.
+    validations:
+      required: true
+  - type: input
+    id: smtp
+    attributes:
+      label: SMTP provider
+      description: Provider name only, never credentials.
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Everything works
+        - Works with a problem
+        - Does not work
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Clients used (web, Swiftfin, Android TV, ...), what you tried, and what happened.

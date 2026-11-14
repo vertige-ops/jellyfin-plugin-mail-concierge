@@ -87,6 +87,10 @@ Recovery and invitation e-mails are an attack surface, so the design assumes hos
 - **Native clients (Swiftfin, Android TV, ...).** They do not load the web script. Users should use the link in the e-mail; entering a PIN in the native screen fails safely.
 - **A link says it is invalid.** Links are single-use and expire; request a new one. Mail scanners do not consume them, because the token is used only when the form is submitted.
 
+## Questions
+
+Common questions are answered in the [FAQ](docs/faq.md).
+
 ## Languages
 
 English, French, Spanish and German are included (the Spanish and German texts are not yet reviewed by native speakers: corrections are welcome). English is the fallback for every missing text. Adding a language needs no code change: see [docs/adding-a-language.md](docs/adding-a-language.md).
@@ -94,6 +98,10 @@ English, French, Spanish and German are included (the Spanish and German texts a
 ## Roadmap
 
 How the plugin fits into Jellyfin and what it depends on: [docs/architecture.md](docs/architecture.md). Planned work is in [docs/roadmap.md](docs/roadmap.md). It is a plan, not a promise.
+
+## How it is built
+
+Developed by one maintainer with AI assistance, who reads and tests every change. The security reviews were AI-assisted too; they are not an external audit.
 
 ## Tested with
 
