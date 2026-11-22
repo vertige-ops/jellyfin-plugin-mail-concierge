@@ -59,20 +59,17 @@ public sealed class AdminConfigRequest
     /// <summary>Gets or sets the validity in hours of the link cancelling an e-mail change.</summary>
     public int? CancelEmailChangeHours { get; set; }
 
-    /// <summary>Gets or sets the recovery e-mails allowed per account per hour.</summary>
-    public int? MaxRecoveryEmailsPerAccountPerHour { get; set; }
-
     /// <summary>Gets or sets the forgot-password requests allowed per IP per 15 minutes.</summary>
     public int? MaxForgotRequestsPerIpPer15Min { get; set; }
 
-    /// <summary>Gets or sets the recovery e-mails allowed per hour server-wide.</summary>
-    public int? MaxRecoveryEmailsPerHour { get; set; }
+    /// <summary>Gets or sets the e-mails one recipient can receive in 24 hours.</summary>
+    public int? MaxEmailsPerRecipientPerDay { get; set; }
 
-    /// <summary>Gets or sets the invitation e-mails allowed per hour server-wide.</summary>
-    public int? MaxInvitationEmailsPerHour { get; set; }
+    /// <summary>Gets or sets the e-mails the server can send in 24 hours.</summary>
+    public int? MaxEmailsPerDay { get; set; }
 
-    /// <summary>Gets or sets the confirmation and change notice e-mails allowed per hour server-wide.</summary>
-    public int? MaxAccountEmailsPerHour { get; set; }
+    /// <summary>Gets or sets the address told when a daily limit is reached; empty turns the notice off, null keeps the stored value.</summary>
+    public string? AdminNotificationAddress { get; set; }
 
     /// <summary>Gets or sets the PIN failures after which the PIN is invalidated.</summary>
     public int? MaxPinFailures { get; set; }
@@ -85,6 +82,9 @@ public sealed class AdminConfigRequest
 
     /// <summary>Gets or sets the sessions policy (None, All, InactiveSinceDays).</summary>
     public string? SessionsOnReset { get; set; }
+
+    /// <summary>Gets or sets how the logo reaches the e-mails (Hosted, Embedded, None); null keeps the stored value.</summary>
+    public string? EmailLogo { get; set; }
 
     /// <summary>Gets or sets the inactivity threshold in days.</summary>
     public int? SessionInactiveDays { get; set; }

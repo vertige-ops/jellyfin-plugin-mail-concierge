@@ -182,7 +182,8 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
-          # The manifest comes from the build job. It must equal the one of main plus exactly one new version entry of this plugin:
+          # The manifest comes from the build job. It must equal the one of main plus exactly one new version entry of this plugin
+          # (the catalogue description and overview, text read from build.yaml, may change with it; no other field may):
           # this release, with the address of its zip asset and the MD5 of the zip downloaded from the build. Nothing is created before this passes.
           if [ "$(ls release/*.zip | wc -l)" -ne 1 ]; then
             echo "::error::Expected exactly one zip in the build artifact."
@@ -204,7 +205,8 @@ jobs:
               | ($new | type) == "array" and ($old | type) == "array"
                 and ($new | others) == ($old | others)
                 and ($old | mine | length) == 1 and ($new | mine | length) == 1
-                and ($new | mine | .[0] | del(.versions)) == ($old | mine | .[0] | del(.versions))
+                and ($new | mine | .[0] | del(.versions, .description, .overview)) == ($old | mine | .[0] | del(.versions, .description, .overview))
+                and ($new | mine | .[0] | (.description | type) == "string" and (.overview | type) == "string")
                 and ($new | mine | .[0].versions | map(select(.version != $version))) == ($old | mine | .[0].versions)
                 and ($new | mine | .[0].versions | map(select(.version == $version)) | length) == 1
                 and ($new | mine | .[0].versions | map(select(.version == $version)) | .[0] | .sourceUrl == $url and .checksum == $sum)

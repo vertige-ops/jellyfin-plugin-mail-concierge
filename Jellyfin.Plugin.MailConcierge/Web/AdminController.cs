@@ -13,6 +13,8 @@ using Jellyfin.Plugin.MailConcierge.Email;
 using Jellyfin.Plugin.MailConcierge.Localization;
 using Jellyfin.Plugin.MailConcierge.Security;
 using MediaBrowser.Common.Api;
+using MediaBrowser.Common.Net;
+using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -41,10 +43,12 @@ public sealed class AdminController : ControllerBase
 
     private readonly IUserManager _users;
     private readonly EmailQueue _queue;
+    private readonly EmailStats _stats;
     private readonly ProxyGuard _guard;
     private readonly ServiceGate _gate;
     private readonly EmailService _emails;
     private readonly EmailLoginProbe _probe;
+    private readonly IServerConfigurationManager _serverConfig;
     private readonly Func<PluginConfiguration> _config;
     private readonly Action<PluginConfiguration> _save;
     private readonly ILogger<AdminController> _logger;
@@ -54,21 +58,25 @@ public sealed class AdminController : ControllerBase
     /// </summary>
     /// <param name="users">The user manager.</param>
     /// <param name="queue">The e-mail queue (test e-mail).</param>
+    /// <param name="stats">The in-memory e-mail counters.</param>
     /// <param name="guard">The proxy guard.</param>
     /// <param name="gate">Tells whether the service is open (enabled, proxy guard quiet).</param>
     /// <param name="emails">The e-mail addresses of the users (shared address count).</param>
     /// <param name="probe">Tells whether e-mail sign-in can work with this Jellyfin version.</param>
+    /// <param name="serverConfig">The Jellyfin server configuration (the published server addresses, to suggest the public URL).</param>
     /// <param name="config">Accessor of the current configuration.</param>
     /// <param name="save">Persists the configuration.</param>
     /// <param name="logger">The logger.</param>
-    public AdminController(IUserManager users, EmailQueue queue, ProxyGuard guard, ServiceGate gate, EmailService emails, EmailLoginProbe probe, Func<PluginConfiguration> config, Action<PluginConfiguration> save, ILogger<AdminController> logger)
+    public AdminController(IUserManager users, EmailQueue queue, EmailStats stats, ProxyGuard guard, ServiceGate gate, EmailService emails, EmailLoginProbe probe, IServerConfigurationManager serverConfig, Func<PluginConfiguration> config, Action<PluginConfiguration> save, ILogger<AdminController> logger)
     {
         _users = users;
         _queue = queue;
+        _stats = stats;
         _guard = guard;
         _gate = gate;
         _emails = emails;
         _probe = probe;
+        _serverConfig = serverConfig;
         _config = config;
         _save = save;
         _logger = logger;
@@ -77,7 +85,9 @@ public sealed class AdminController : ControllerBase
     /// <summary>
     /// Gets the configuration, with the secrets blanked.
     /// </summary>
-    /// <returns>The configuration.</returns>
+    /// <returns>
+    /// The configuration. <c>suggestedPublicUrl</c> is the address already published in Jellyfin (or null): computed on each call, never stored, and never an address of the incoming request.
+    /// </returns>
     [HttpGet("Config")]
     public ActionResult GetConfig()
     {
@@ -89,6 +99,7 @@ public sealed class AdminController : ControllerBase
                 enabled = c.Enabled,
                 nativeForgotPassword = c.NativeForgotPassword,
                 publicUrl = c.PublicUrl,
+                suggestedPublicUrl = SuggestedPublicUrl(),
                 defaultLanguage = c.DefaultLanguage,
                 languages = Languages.Supported,
                 smtpHost = c.SmtpHost,
@@ -103,16 +114,16 @@ public sealed class AdminController : ControllerBase
                 invitationDays = c.InvitationDays,
                 confirmationHours = c.ConfirmationHours,
                 cancelEmailChangeHours = c.CancelEmailChangeHours,
-                maxRecoveryEmailsPerAccountPerHour = c.MaxRecoveryEmailsPerAccountPerHour,
                 maxForgotRequestsPerIpPer15Min = c.MaxForgotRequestsPerIpPer15Min,
-                maxRecoveryEmailsPerHour = c.MaxRecoveryEmailsPerHour,
-                maxInvitationEmailsPerHour = c.MaxInvitationEmailsPerHour,
-                maxAccountEmailsPerHour = c.MaxAccountEmailsPerHour,
+                maxEmailsPerRecipientPerDay = c.MaxEmailsPerRecipientPerDay,
+                maxEmailsPerDay = c.MaxEmailsPerDay,
+                adminNotificationAddress = c.AdminNotificationAddress,
                 maxPinFailures = c.MaxPinFailures,
                 allowAdministrators = c.AllowAdministrators,
                 emailLogin = c.EmailLogin,
                 sessionsOnReset = c.SessionsOnReset.ToString(),
                 sessionInactiveDays = c.SessionInactiveDays,
+                emailLogo = c.EmailLogo.ToString(),
                 seerrEnabled = c.SeerrEnabled,
                 seerrUrl = c.SeerrUrl,
                 seerrApiKey = string.Empty,
@@ -135,13 +146,18 @@ public sealed class AdminController : ControllerBase
             return Code(StatusCodes.Status400BadRequest, "invalid");
         }
 
-        var error = Validate(request, out var smtpSecurity, out var sessions);
+        var error = Validate(request, out var smtpSecurity, out var sessions, out var emailLogo);
         if (error is not null)
         {
             return Code(StatusCodes.Status400BadRequest, error);
         }
 
         var c = _config();
+        if (BecomesEnabledAndIncomplete(request, c))
+        {
+            return Code(StatusCodes.Status400BadRequest, "smtp_incomplete");
+        }
+
         if (SecretOfAnotherServer(request, smtpSecurity, c) is { } secretError)
         {
             return Code(StatusCodes.Status400BadRequest, secretError);
@@ -170,16 +186,16 @@ public sealed class AdminController : ControllerBase
         c.InvitationDays = request.InvitationDays ?? c.InvitationDays;
         c.ConfirmationHours = request.ConfirmationHours ?? c.ConfirmationHours;
         c.CancelEmailChangeHours = request.CancelEmailChangeHours ?? c.CancelEmailChangeHours;
-        c.MaxRecoveryEmailsPerAccountPerHour = request.MaxRecoveryEmailsPerAccountPerHour ?? c.MaxRecoveryEmailsPerAccountPerHour;
         c.MaxForgotRequestsPerIpPer15Min = request.MaxForgotRequestsPerIpPer15Min ?? c.MaxForgotRequestsPerIpPer15Min;
-        c.MaxRecoveryEmailsPerHour = request.MaxRecoveryEmailsPerHour ?? c.MaxRecoveryEmailsPerHour;
-        c.MaxInvitationEmailsPerHour = request.MaxInvitationEmailsPerHour ?? c.MaxInvitationEmailsPerHour;
-        c.MaxAccountEmailsPerHour = request.MaxAccountEmailsPerHour ?? c.MaxAccountEmailsPerHour;
+        c.MaxEmailsPerRecipientPerDay = request.MaxEmailsPerRecipientPerDay ?? c.MaxEmailsPerRecipientPerDay;
+        c.MaxEmailsPerDay = request.MaxEmailsPerDay ?? c.MaxEmailsPerDay;
+        c.AdminNotificationAddress = request.AdminNotificationAddress?.Trim() ?? c.AdminNotificationAddress;
         c.MaxPinFailures = request.MaxPinFailures ?? c.MaxPinFailures;
         c.AllowAdministrators = request.AllowAdministrators ?? c.AllowAdministrators;
         c.EmailLogin = request.EmailLogin ?? c.EmailLogin;
         c.SessionsOnReset = sessions ?? c.SessionsOnReset;
         c.SessionInactiveDays = request.SessionInactiveDays ?? c.SessionInactiveDays;
+        c.EmailLogo = emailLogo ?? c.EmailLogo;
         c.SeerrEnabled = request.SeerrEnabled ?? c.SeerrEnabled;
         c.SeerrUrl = request.SeerrUrl?.Trim() ?? c.SeerrUrl;
         if (!string.IsNullOrEmpty(request.SeerrApiKey))
@@ -199,6 +215,13 @@ public sealed class AdminController : ControllerBase
         _save(c);
         return Json(StatusCodes.Status200OK, new { ok = true });
     }
+
+    /// <summary>
+    /// Gets the SMTP presets shipped with the plugin (read only, no secret).
+    /// </summary>
+    /// <returns>The list <c>[{ id, name, host, port, security, docUrl, checkedOn }]</c>.</returns>
+    [HttpGet("SmtpPresets")]
+    public ActionResult SmtpPresets() => Json(StatusCodes.Status200OK, Configuration.SmtpPresets.All);
 
     /// <summary>
     /// Gets the templates shipped with the plugin, for "reset to default".
@@ -327,7 +350,9 @@ public sealed class AdminController : ControllerBase
     /// Gets the state shown in the banner of the page.
     /// </summary>
     /// <returns>
-    /// <c>{ proxyGuardTripped, reason, canSendEmail, serviceOpen, emailLoginAvailable, sharedEmailCount, sharedEmailAccounts }</c>; <c>reason</c> is a code, never a sentence;
+    /// <c>{ proxyGuardTripped, reason, canSendEmail, serviceOpen, emailLoginAvailable, sharedEmailCount, sharedEmailAccounts, emailQuota }</c>; <c>reason</c> is a code, never a sentence;
+    /// <c>emailQuota</c> is <c>{ used, limit, perRecipientLimit, windowHours, limitReachedAt, recipientsBlocked }</c>: the e-mails counted in the last 24 hours against the limit of the server,
+    /// the limit for one recipient, when a limit last stopped an e-mail in that window (null when none did) and how many recipients are at their limit now; counts only, never an address, and nothing is consumed;
     /// <c>sharedEmailCount</c> is the number of confirmed addresses held by several accounts, 0 when the stored addresses cannot be read;
     /// <c>sharedEmailAccounts</c> names those accounts, never the addresses: one entry per shared address, each the sorted user names of the accounts
     /// holding it (an id without an account is left out), the entries sorted by their first name, at most 20 entries of 10 names; empty when the stored addresses cannot be read.
@@ -379,7 +404,60 @@ public sealed class AdminController : ControllerBase
                 emailLoginAvailable = _probe.IsAvailable,
                 sharedEmailCount = shared,
                 sharedEmailAccounts = sharedAccounts,
+                emailQuota = QuotaState(),
             });
+    }
+
+    /// <summary>
+    /// Gets the e-mail counters kept in memory since the plugin started.
+    /// </summary>
+    /// <returns><c>{ since, invitations: { sent, failed }, users: [{ userId, sent, failed, lastSentAt }] }</c>: ids and counts only, never an address.</returns>
+    [HttpGet("EmailStats")]
+    public ActionResult GetEmailStats()
+    {
+        var snapshot = _stats.Snapshot();
+        return Json(
+            StatusCodes.Status200OK,
+            new
+            {
+                since = snapshot.Since,
+                invitations = new { sent = snapshot.Invitations.Sent, failed = snapshot.Invitations.Failed },
+                users = snapshot.Users.Select(u => new { userId = u.UserId, sent = u.Sent, failed = u.Failed, lastSentAt = u.LastSentAt }).ToList(),
+            });
+    }
+
+    private object QuotaState()
+    {
+        var c = _config();
+        var perRecipient = EmailQuota.Effective(c.MaxEmailsPerRecipientPerDay, EmailQuota.MaxPerRecipient, EmailQuota.DefaultPerRecipient);
+        var (used, reachedAt, blocked) = _queue.Quota.Snapshot(perRecipient);
+        return new
+        {
+            used,
+            limit = EmailQuota.Effective(c.MaxEmailsPerDay, EmailQuota.MaxPerDay, EmailQuota.DefaultPerDay),
+            perRecipientLimit = perRecipient,
+            windowHours = EmailQuota.WindowHours,
+            limitReachedAt = reachedAt,
+            recipientsBlocked = blocked,
+        };
+    }
+
+    // The administrator is never locked out: a save is refused only when it takes the plugin from "disabled or complete" to "enabled and incomplete".
+    // An installation already enabled and incomplete can therefore fill its settings tab by tab, in any order. The merge is computed on a copy,
+    // with the same rules as the save, so nothing is applied when this returns true.
+    // The five copied fields are exactly the ones SmtpSettings.IsComplete reads: if it ever reads another one, copy it here too,
+    // trimmed the way the save trims it, or the merge will judge a state the save does not produce.
+    private static bool BecomesEnabledAndIncomplete(AdminConfigRequest r, PluginConfiguration c)
+    {
+        var merged = new PluginConfiguration
+        {
+            Enabled = r.Enabled ?? c.Enabled,
+            PublicUrl = r.PublicUrl?.Trim() ?? c.PublicUrl,
+            SmtpHost = r.SmtpHost?.Trim() ?? c.SmtpHost,
+            SmtpPort = r.SmtpPort ?? c.SmtpPort,
+            FromAddress = r.FromAddress?.Trim() ?? c.FromAddress,
+        };
+        return merged.Enabled && !SmtpSettings.IsComplete(merged) && !(c.Enabled && !SmtpSettings.IsComplete(c));
     }
 
     // A stored secret is never sent to another server, or without encryption, without being typed again: an empty password or key field
@@ -412,10 +490,11 @@ public sealed class AdminController : ControllerBase
     private static string ServerOf(string? url)
         => Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var uri) ? $"{uri.Scheme}://{uri.Host}:{uri.Port}".ToLowerInvariant() : string.Empty;
 
-    private static string? Validate(AdminConfigRequest r, out SmtpSecurity? smtpSecurity, out SessionClosePolicy? sessions)
+    private static string? Validate(AdminConfigRequest r, out SmtpSecurity? smtpSecurity, out SessionClosePolicy? sessions, out EmailLogoMode? emailLogo)
     {
         smtpSecurity = null;
         sessions = null;
+        emailLogo = null;
 
         if (r.SmtpPort is < 1 or > 65535)
         {
@@ -424,10 +503,15 @@ public sealed class AdminController : ControllerBase
 
         var positives = new[]
         {
-            r.PinMinutes, r.InvitationDays, r.ConfirmationHours, r.CancelEmailChangeHours, r.MaxRecoveryEmailsPerAccountPerHour,
-            r.MaxForgotRequestsPerIpPer15Min, r.MaxRecoveryEmailsPerHour, r.MaxInvitationEmailsPerHour, r.MaxAccountEmailsPerHour, r.MaxPinFailures, r.SessionInactiveDays,
+            r.PinMinutes, r.InvitationDays, r.ConfirmationHours, r.CancelEmailChangeHours,
+            r.MaxForgotRequestsPerIpPer15Min, r.MaxPinFailures, r.SessionInactiveDays,
         };
         if (positives.Any(v => v is < 1 or > 100000))
+        {
+            return "invalid_number";
+        }
+
+        if (r.MaxEmailsPerRecipientPerDay is < 1 or > EmailQuota.MaxPerRecipient || r.MaxEmailsPerDay is < 1 or > EmailQuota.MaxPerDay)
         {
             return "invalid_number";
         }
@@ -467,7 +551,17 @@ public sealed class AdminController : ControllerBase
             sessions = p;
         }
 
-        var texts = new[] { r.SmtpHost, r.SmtpUsername, r.SmtpPassword, r.FromAddress, r.FromName, r.PublicUrl, r.SeerrUrl, r.SeerrApiKey };
+        if (r.EmailLogo is not null)
+        {
+            if (!Enum.TryParse<EmailLogoMode>(r.EmailLogo, true, out var logo) || !Enum.IsDefined(logo))
+            {
+                return "invalid_email_logo";
+            }
+
+            emailLogo = logo;
+        }
+
+        var texts = new[] { r.SmtpHost, r.SmtpUsername, r.SmtpPassword, r.FromAddress, r.AdminNotificationAddress, r.FromName, r.PublicUrl, r.SeerrUrl, r.SeerrApiKey };
         if (texts.Any(t => t is not null && t.Length > MaxTextChars))
         {
             return "invalid_text";
@@ -476,6 +570,17 @@ public sealed class AdminController : ControllerBase
         if (r.FromAddress is { Length: > 0 } from && !string.IsNullOrWhiteSpace(from) && !EmailService.TryNormalize(from, out _))
         {
             return "invalid_from_address";
+        }
+
+        if (r.AdminNotificationAddress is { Length: > 0 } admin && !string.IsNullOrWhiteSpace(admin) && !EmailService.TryNormalize(admin, out _))
+        {
+            return "invalid_admin_address";
+        }
+
+        // Only the host of the request is checked: a host already stored, even an invalid one, does not block a save that leaves it alone.
+        if (!string.IsNullOrWhiteSpace(r.SmtpHost) && !SmtpSettings.IsValidHost(r.SmtpHost.Trim()))
+        {
+            return "invalid_smtp_host";
         }
 
         if (r.TemplateOverrides is not null)
@@ -529,6 +634,20 @@ public sealed class AdminController : ControllerBase
            || (Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)
                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
                && !string.IsNullOrEmpty(uri.Host));
+
+    // The published address is only read here, to be suggested: a failure to read it (the server configuration is not available) gives no suggestion and never breaks the page.
+    private string? SuggestedPublicUrl()
+    {
+        try
+        {
+            return PublicUrlSuggestion.From(_serverConfig.GetNetworkConfiguration().PublishedServerUriBySubnet);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("The published server address could not be read: {ExceptionType}", ex.GetType().FullName);
+            return null;
+        }
+    }
 
     private ContentResult Code(int status, string code) => Json(status, new Dictionary<string, string> { ["code"] = code });
 

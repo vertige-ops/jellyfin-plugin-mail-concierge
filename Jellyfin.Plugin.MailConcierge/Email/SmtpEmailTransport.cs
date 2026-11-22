@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.MailConcierge.Configuration;
@@ -41,7 +42,7 @@ public sealed class SmtpEmailTransport : IEmailTransport
             _ => SecureSocketOptions.StartTls,
         };
 
-        await client.ConnectAsync(config.SmtpHost, config.SmtpPort, security, ct).ConfigureAwait(false);
+        await client.ConnectAsync(ConnectHost(config.SmtpHost), config.SmtpPort, security, ct).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(config.SmtpUsername))
         {
             await client.AuthenticateAsync(config.SmtpUsername, config.SmtpPassword, ct).ConfigureAwait(false);
@@ -50,6 +51,15 @@ public sealed class SmtpEmailTransport : IEmailTransport
         await client.SendAsync(mime, ct).ConfigureAwait(false);
         await DisconnectQuietlyAsync(client).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The host as the SMTP client wants it: an IPv6 address is accepted in the settings with or without brackets, but only the bare
+    /// form can be connected to. One leading <c>[</c> and one trailing <c>]</c> are removed, and only when both are there.
+    /// </summary>
+    /// <param name="host">The stored host (never changed in the settings).</param>
+    /// <returns>The host to connect to.</returns>
+    internal static string ConnectHost(string host)
+        => host is { Length: > 2 } && host[0] == '[' && host[^1] == ']' ? host[1..^1] : host;
 
     /// <summary>
     /// Closes the connection once the message has been accepted. A failure here is ignored: the message was sent, and
@@ -85,7 +95,32 @@ public sealed class SmtpEmailTransport : IEmailTransport
         mime.Date = DateTimeOffset.UtcNow;
         mime.MessageId = string.Create(CultureInfo.InvariantCulture, $"{Guid.NewGuid():N}@{from.Domain}");
         mime.Headers.Add("Auto-Submitted", "auto-generated");
-        mime.Body = new BodyBuilder { TextBody = m.Text, HtmlBody = m.Html }.ToMessageBody();
+        var alternative = new MultipartAlternative
+        {
+            new TextPart("plain") { Text = m.Text },
+            new TextPart("html") { Text = m.Html },
+        };
+
+        // The inline logo travels with the message exactly when its HTML refers to it, whatever the setting is now.
+        // The usual layout is related(alternative(text, html), image): Gmail then treats the image as part of the
+        // message body instead of listing it as an attachment.
+        if (m.Html.Contains("cid:" + EmailTemplates.LogoContentId, StringComparison.Ordinal)
+            && EmailTemplates.LogoBytes() is { } logo)
+        {
+            var part = new MimePart("image", "png")
+            {
+                Content = new MimeContent(new MemoryStream(logo)),
+                ContentTransferEncoding = ContentEncoding.Base64,
+                ContentId = EmailTemplates.LogoContentId,
+                ContentDisposition = new ContentDisposition(ContentDisposition.Inline),
+            };
+            mime.Body = new MultipartRelated { alternative, part };
+        }
+        else
+        {
+            mime.Body = alternative;
+        }
+
         return mime;
     }
 }

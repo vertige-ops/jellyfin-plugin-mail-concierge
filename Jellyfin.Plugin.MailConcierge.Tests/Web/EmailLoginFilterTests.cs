@@ -48,7 +48,7 @@ public sealed class EmailLoginFilterTests : IDisposable
 
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "mailconcierge-emailfilter-" + Guid.NewGuid().ToString("N"));
     private readonly FakeTimeProvider _fake = new(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero));
-    private readonly PluginConfiguration _config = new() { EmailLogin = true };
+    private readonly PluginConfiguration _config = new() { Enabled = true, EmailLogin = true };
     private readonly User _alice = new("alice", AccountPolicy.DefaultAuthProviderId, "reset") { Id = Guid.NewGuid(), Password = "stored-hash" };
     private readonly Mock<IUserManager> _users = new(MockBehavior.Strict);
     private readonly MailConciergeStore _store;
@@ -63,7 +63,7 @@ public sealed class EmailLoginFilterTests : IDisposable
         Directory.CreateDirectory(_dir);
         _store = new MailConciergeStore(_dir);
         var limiter = new RateLimiter(_fake);
-        _queue = new EmailQueue(() => _config, new Mock<IEmailTransport>().Object, limiter, NullLogger<EmailQueue>.Instance, _fake);
+        _queue = new EmailQueue(() => _config, new Mock<IEmailTransport>().Object, NullLogger<EmailQueue>.Instance, _fake);
         _guard = Guards.Quiet();
         var email = new EmailService(
             _store,

@@ -41,7 +41,7 @@ public sealed class EmailLoginResolverTests : IDisposable
         Directory.CreateDirectory(_dir);
         _store = new MailConciergeStore(_dir);
         var limiter = new RateLimiter(_time);
-        _queue = new EmailQueue(() => _config, new Mock<IEmailTransport>().Object, limiter, NullLogger<EmailQueue>.Instance, _time);
+        _queue = new EmailQueue(() => _config, new Mock<IEmailTransport>().Object, NullLogger<EmailQueue>.Instance, _time);
         _email = new EmailService(
             _store,
             new TokenService(_dir),

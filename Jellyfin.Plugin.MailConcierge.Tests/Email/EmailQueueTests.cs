@@ -12,6 +12,7 @@ using Xunit;
 
 namespace Jellyfin.Plugin.MailConcierge.Tests.Email;
 
+[Collection(LogoSeamCollection.Name)]
 public class EmailQueueTests
 {
     private const string Password = "s3cr3t-smtp-p@ss";
@@ -24,13 +25,138 @@ public class EmailQueueTests
         SmtpHost = "smtp.example",
         FromAddress = "jf@example.com",
         SmtpPassword = Password,
-        MaxRecoveryEmailsPerHour = max,
-        MaxInvitationEmailsPerHour = max,
-        MaxAccountEmailsPerHour = max,
+        MaxEmailsPerRecipientPerDay = max,
+        MaxEmailsPerDay = max,
     };
 
     private static EmailQueue Create(PluginConfiguration config, IEmailTransport transport, TestLogger logger, int capacity = 100)
-        => new(() => config, transport, new RateLimiter(TimeProvider.System), logger, TimeProvider.System, new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero }, capacity);
+        => new(() => config, transport, logger, TimeProvider.System, new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero }, capacity);
+
+    private static EmailQueue CreateWithStats(PluginConfiguration config, IEmailTransport transport, TestLogger logger, EmailStats stats, int capacity = 100)
+        => new(() => config, transport, logger, TimeProvider.System, new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero }, capacity, stats);
+
+    [Fact]
+    public async Task Stats_SuccessCountsAsSent()
+    {
+        var stats = new EmailStats(TimeProvider.System);
+        var transport = new FakeTransport();
+        var logger = new TestLogger();
+        var queue = CreateWithStats(Config(), transport, logger, stats);
+        await queue.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message));
+            Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message with { Template = "invitation", UserId = null }));
+            await logger.WaitForAsync("Sent invitation e-mail");
+        }
+        finally
+        {
+            await queue.StopAsync(CancellationToken.None);
+        }
+
+        var snapshot = stats.Snapshot();
+        var row = Assert.Single(snapshot.Users);
+        Assert.Equal(Message.UserId, row.UserId);
+        Assert.Equal(1, row.Sent);
+        Assert.Equal(0, row.Failed);
+        Assert.NotNull(row.LastSentAt);
+        Assert.Equal(new EmailTotals(1, 0), snapshot.Invitations);
+    }
+
+    [Fact]
+    public async Task Stats_ThreeFailingAttempts_CountOneFailed()
+    {
+        var stats = new EmailStats(TimeProvider.System);
+        var transport = new FakeTransport { Throw = new InvalidOperationException("boom") };
+        var logger = new TestLogger();
+        var queue = CreateWithStats(Config(), transport, logger, stats);
+        await queue.StartAsync(CancellationToken.None);
+        try
+        {
+            queue.Enqueue(Message);
+            await logger.WaitForAsync("after 3 attempts");
+        }
+        finally
+        {
+            await queue.StopAsync(CancellationToken.None);
+        }
+
+        Assert.Equal(3, transport.Calls);
+        Assert.Equal(new AccountEmailStats(Message.UserId!.Value, 0, 1, null), Assert.Single(stats.Snapshot().Users));
+    }
+
+    [Fact]
+    public async Task Stats_ARetryThatSucceeds_CountsOneSentAndNoFailure()
+    {
+        var stats = new EmailStats(TimeProvider.System);
+        var transport = new FakeTransport { FailFirst = 2 };
+        var logger = new TestLogger();
+        var queue = CreateWithStats(Config(), transport, logger, stats);
+        await queue.StartAsync(CancellationToken.None);
+        try
+        {
+            queue.Enqueue(Message);
+            await logger.WaitForAsync("Sent recovery e-mail");
+        }
+        finally
+        {
+            await queue.StopAsync(CancellationToken.None);
+        }
+
+        var row = Assert.Single(stats.Snapshot().Users);
+        Assert.Equal(1, row.Sent);
+        Assert.Equal(0, row.Failed);
+    }
+
+    [Fact]
+    public async Task Stats_SendTest_CountsNothing()
+    {
+        var stats = new EmailStats(TimeProvider.System);
+        var queue = CreateWithStats(Config(), new FakeTransport(), new TestLogger(), stats);
+
+        Assert.Null(await queue.SendTestAsync("bob@example.com"));
+        var failing = CreateWithStats(Config(), new FakeTransport { Throw = new InvalidOperationException("boom") }, new TestLogger(), stats);
+        Assert.NotNull(await failing.SendTestAsync("bob@example.com"));
+
+        var snapshot = stats.Snapshot();
+        Assert.Empty(snapshot.Users);
+        Assert.Equal(new EmailTotals(0, 0), snapshot.Invitations);
+    }
+
+    [Fact]
+    public async Task Stats_MessagesRefusedAtEnqueue_CountNothing()
+    {
+        var stats = new EmailStats(TimeProvider.System);
+        var notConfigured = Config();
+        notConfigured.SmtpHost = string.Empty;
+        Assert.Equal(EnqueueResult.NotConfigured, CreateWithStats(notConfigured, new FakeTransport(), new TestLogger(), stats).Enqueue(Message));
+
+        var logger = new TestLogger();
+        var transport = new FakeTransport();
+        var queue = CreateWithStats(Config(1), transport, logger, stats, capacity: 1);
+        await queue.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message));
+            await logger.WaitForAsync("Sent recovery e-mail");
+            Assert.Equal(EnqueueResult.LimitReached, queue.Enqueue(Message));
+            Assert.Equal(EnqueueResult.LimitReached, queue.Enqueue(Message));
+        }
+        finally
+        {
+            await queue.StopAsync(CancellationToken.None);
+        }
+
+        var full = CreateWithStats(Config(), new FakeTransport(), new TestLogger(), stats, capacity: 1);
+        Assert.Equal(EnqueueResult.Queued, full.Enqueue(Message with { UserId = Guid.NewGuid() }));
+        Assert.Equal(EnqueueResult.QueueFull, full.Enqueue(Message with { UserId = Guid.NewGuid() }));
+
+        // Only the one delivered message is counted: the refused ones and the one still waiting in a queue without worker are not.
+        Assert.Equal(1, transport.Calls);
+        var row = Assert.Single(stats.Snapshot().Users);
+        Assert.Equal(1, row.Sent);
+        Assert.Equal(0, row.Failed);
+    }
 
     [Fact]
     public void Enqueue_ReturnsFalse_WhenPublicUrlMissing()
@@ -43,7 +169,7 @@ public class EmailQueueTests
     }
 
     [Fact]
-    public void Enqueue_ReturnsLimitReached_WhenTheBudgetOfItsTypeIsExhausted_AndWarns()
+    public void Enqueue_ReturnsLimitReached_WhenTheDailyLimitOfItsRecipientIsReached_AndWarns()
     {
         var logger = new TestLogger();
         var queue = Create(Config(2), new FakeTransport(), logger);
@@ -69,7 +195,7 @@ public class EmailQueueTests
     }
 
     [Fact]
-    public async Task Enqueue_WhenFull_DoesNotConsumeTheBudget()
+    public async Task Enqueue_WhenFull_DoesNotCountTheMessage()
     {
         var transport = new FakeTransport();
         var queue = Create(Config(3), transport, new TestLogger(), capacity: 2);
@@ -135,25 +261,21 @@ public class EmailQueueTests
         Assert.Single(logger.Warnings);
     }
 
-    [Theory]
-    [InlineData("recovery", "invitation")]
-    [InlineData("recovery", "confirm-email")]
-    [InlineData("confirm-email", "invitation")]
-    [InlineData("password-changed", "invitation")]
-    [InlineData("confirm-email", "recovery")]
-    public void Enqueue_BudgetsAreSeparateByType(string exhausted, string untouched)
+    [Fact]
+    public void Enqueue_TheLimitsAreSharedByEveryKindOfMessage()
     {
         var queue = Create(Config(1), new FakeTransport(), new TestLogger());
-        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message with { Template = exhausted }));
-        Assert.Equal(EnqueueResult.LimitReached, queue.Enqueue(Message with { Template = exhausted }));
+        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message with { Template = "recovery" }));
 
-        Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message with { Template = untouched }));
+        Assert.Equal(EnqueueResult.LimitReached, queue.Enqueue(Message with { Template = "invitation" }));
+        Assert.Equal(EnqueueResult.LimitReached, queue.Enqueue(Message with { Template = "confirm-email" }));
+        Assert.Equal(EnqueueResult.LimitReached, queue.Enqueue(Message with { Template = "password-changed" }));
     }
 
     [Theory]
     [InlineData("email-changed")]
     [InlineData("email-change-cancelled")]
-    public void Enqueue_SecurityNotices_AreNeverStarvedByTheAccountBudget(string notice)
+    public void Enqueue_SecurityNotices_AreNeverStoppedByTheDailyLimits(string notice)
     {
         var queue = Create(Config(1), new FakeTransport(), new TestLogger());
         Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message with { Template = "confirm-email" }));
@@ -268,13 +390,55 @@ public class EmailQueueTests
         Assert.NotNull(await Create(config, new FakeTransport(), new TestLogger()).SendTestAsync("bob@example.com"));
     }
 
+    [Theory]
+    [InlineData(EmailLogoMode.Embedded, true, "cid:mailconcierge-logo@mailconcierge.invalid")]
+    [InlineData(EmailLogoMode.Hosted, true, "https://jf.example/MailConcierge/assets/logo.png")]
+    [InlineData(EmailLogoMode.None, false, "")]
+    public async Task SendTestAsync_ShowsTheLogoAccordingToTheMode(EmailLogoMode mode, bool hasImage, string source)
+    {
+        var config = Config();
+        config.EmailLogo = mode;
+        var transport = new FakeTransport();
+
+        Assert.Null(await Create(config, transport, new TestLogger()).SendTestAsync("bob@example.com"));
+
+        var sent = Assert.Single(transport.Sent);
+        if (hasImage)
+        {
+            Assert.Contains("<img src=\"" + source + "\"", sent.Html, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.DoesNotContain("<img", sent.Html, StringComparison.Ordinal);
+        }
+
+        // The subject and the plain text do not change with the mode.
+        Assert.Equal(EmailTemplates.GetString(config.DefaultLanguage, "email.test.subject"), sent.Subject);
+        Assert.Equal(EmailTemplates.GetString(config.DefaultLanguage, "email.test.body"), sent.Text);
+        Assert.DoesNotContain("<img", sent.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SendTestAsync_Embedded_WithAnUnreadableLogo_StillSendsWithoutImage()
+    {
+        using var seam = LogoSeam.Unreadable();
+        var config = Config();
+        var transport = new FakeTransport();
+
+        Assert.Null(await Create(config, transport, new TestLogger()).SendTestAsync("bob@example.com"));
+
+        var sent = Assert.Single(transport.Sent);
+        Assert.DoesNotContain("<img", sent.Html, StringComparison.Ordinal);
+        Assert.Contains(EmailTemplates.GetString(config.DefaultLanguage, "email.test.body").Split('\n')[0], System.Net.WebUtility.HtmlDecode(sent.Html), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task EmailQueue_AttemptThatNeverCompletes_EndsAtTwoMinutes_AndTheNextMessageIsDelivered()
     {
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
         var transport = new HangingTransport("slow@example.com");
         var logger = new TestLogger();
-        var queue = new EmailQueue(() => Config(), transport, new RateLimiter(time), logger, time, new[] { TimeSpan.Zero }, 100);
+        var queue = new EmailQueue(() => Config(), transport, logger, time, new[] { TimeSpan.Zero }, 100);
         await queue.StartAsync(CancellationToken.None);
         try
         {
@@ -310,7 +474,7 @@ public class EmailQueueTests
     {
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero));
         var transport = new HangingTransport("slow@example.com");
-        var queue = new EmailQueue(() => Config(), transport, new RateLimiter(time), new TestLogger(), time, new[] { TimeSpan.Zero }, 100);
+        var queue = new EmailQueue(() => Config(), transport, new TestLogger(), time, new[] { TimeSpan.Zero }, 100);
         await queue.StartAsync(CancellationToken.None);
         Assert.Equal(EnqueueResult.Queued, queue.Enqueue(Message with { To = "slow@example.com" }));
         await transport.WaitForCallsAsync(1);
@@ -391,12 +555,15 @@ public class EmailQueueTests
 
         public int Succeeded => Volatile.Read(ref _succeeded);
 
+        public List<EmailMessage> Sent { get; } = new();
+
         public Task SendAsync(EmailMessage m, CancellationToken ct)
         {
             int n;
             lock (_lock)
             {
                 n = ++_calls;
+                Sent.Add(m);
             }
 
             if (Throw is not null || n <= FailFirst)

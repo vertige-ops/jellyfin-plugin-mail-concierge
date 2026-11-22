@@ -34,12 +34,13 @@ A Jellyfin 12.4 plugin that adds e-mail invitations, e-mail password recovery an
 Open Dashboard, Plugins, Mail Concierge. Set at least:
 
 1. The public URL.
-2. The SMTP settings, then use the test e-mail button.
-3. The durations and limits if the defaults do not suit you (invitation 7 days, PIN 30 minutes, 3 recovery e-mails per account and hour; every limit is listed in the [security model](docs/security-model.md)).
-4. What happens to sessions after a reset (none, all, or inactive for N days; default: all).
-5. Optionally Seerr (URL and API key), and the e-mail templates (English, French, Spanish and German, HTML with a text version, editable).
+2. The SMTP settings (server name only, for example `smtp.example.org`), then use the test e-mail button. The provider list fills in the host, port and security for Gmail, Brevo, SMTP2GO, Mailgun and Mailjet: Gmail needs an app password, the others need the sender's domain verified with the provider.
+3. Tick **Enable Mail Concierge** on the General tab and save. A new install starts turned off, and the plugin refuses to be enabled until the public URL, the SMTP server and the sender address are saved and valid. Until it is enabled, invitations and e-mail recovery do not work (the test e-mail does).
+4. The durations and limits if the defaults do not suit you (invitation 7 days, PIN 30 minutes, 10 e-mails per recipient and 200 per day for the whole server; every limit is listed in the [security model](docs/security-model.md)). The General tab shows how many e-mails the last 24 hours used and warns you when a limit stopped one (you can also give an address to be warned by e-mail), and the Accounts tab counts the e-mails sent to each account since Jellyfin started.
+5. What happens to sessions after a reset (none, all, or inactive for N days; default: all).
+6. Optionally Seerr (URL and API key), and the e-mail templates (English, French, Spanish and German, HTML with a text version, editable).
 
-Use the assignment button to give the Mail Concierge reset provider to existing users. Administrators are excluded unless you tick the option, and LDAP/SSO accounts are always excluded. Invitations are created from the user list of the dashboard, next to the + button.
+Use the assignment button to give the Mail Concierge reset provider to existing users. Administrators are excluded unless you tick the option, and LDAP/SSO accounts are always excluded. Invitations are created from the user list of the dashboard, next to the + button. Each invitation has a **Live TV** checkbox (shown only if your server has Live TV): an invited account gets live TV only when it is ticked.
 
 A setting lets you go back to the native Jellyfin forgot-password behavior.
 
@@ -80,12 +81,13 @@ Recovery and invitation e-mails are an attack surface, so the design assumes hos
 
 ## Troubleshooting
 
+- **Invitations or recovery e-mails do nothing.** Tick **Enable Mail Concierge** on the General tab (a yellow banner says when it is off) and save.
 - **E-mails are not received.** Use the test e-mail button in the settings. Check the SMTP host, port and security mode, the sender address, the spam folder, and the Jellyfin log (secrets are never logged). Make sure the public URL is set: no e-mail is sent without it. The account must also have a confirmed e-mail address, and the per-account, per-IP and server limits may be reached.
 - **Mail Concierge refuses to activate behind a proxy.** Add your reverse proxy to **Known Proxies** in Dashboard, Networking, then reload the Mail Concierge settings. See the proxy guard in the [known limits](docs/security-model.md#known-limits-and-caveats).
 - **A user is locked out and cannot recover.** Jellyfin disables an account after several wrong passwords. Mail Concierge recovery does not work for a disabled account: an administrator must re-enable it first.
 - **The e-mail field or the invite button does not appear.** The client script is injected into `index.html`. Hard-refresh the browser, check that no proxy or cache serves a stale or compressed `index.html`, and that the plugin is enabled and Jellyfin was restarted after installation.
 - **Native clients (Swiftfin, Android TV, ...).** They do not load the web script. Users should use the link in the e-mail; entering a PIN in the native screen fails safely.
-- **A link says it is invalid.** Links are single-use and expire; request a new one. Mail scanners do not consume them, because the token is used only when the form is submitted.
+- **A link says it is invalid.** Links are single-use and expire; request a new one. Mail scanners do not consume them, because the token is used only when the form is submitted. Also copy the whole link: the part after the `#` carries the token, and some mail clients, link shorteners or scanners drop it. JavaScript must be on in the browser. If a link opens a 404, copy it from the text version of the e-mail.
 
 ## Questions
 
@@ -111,6 +113,7 @@ Developed by one maintainer with AI assistance, who reads and tests every change
 
 | Plugin version | Jellyfin version |
 | --- | --- |
+| 12.4.1.0 | Jellyfin 12.4 and later 12.x (tested on 12.4 only) |
 | 12.4.0.0 | Jellyfin 12.4 and later 12.x (tested on 12.4 only) |
 | 12.0.0.0 | Jellyfin 12.1 to 12.3 |
 
@@ -127,7 +130,7 @@ To produce the plugin zip locally (needs [jprm](https://github.com/oddstr13/jell
 
 ```shell
 pip install jprm
-jprm plugin build . --output artifacts   # artifacts/mail-concierge_12.4.0.0.zip
+jprm plugin build . --output artifacts   # artifacts/mail-concierge_12.4.1.0.zip
 ```
 
 `jprm plugin build` rewrites the version in `Directory.Build.props` to the one in `build.yaml` (or to the `--version` you pass).
@@ -138,7 +141,7 @@ jprm plugin build . --output artifacts   # artifacts/mail-concierge_12.4.0.0.zip
 
 ## Release
 
-Pushing a tag `v*` (for example `v12.4.0.0`) runs `.github/workflows/publish.yaml`: it builds the zip with jprm (renamed `Jellyfin.Plugin.MailConcierge_<targetAbi>.zip` without the last `.0`, for example `…_12.4.0.zip`), creates the GitHub release with the zip, adds the version (MD5 checksum, release asset `sourceUrl`, timestamp) to `manifest.json` and commits it to `main`. The build comes from the pushed tag, and the **tag drives the version** (`--version`), so `version` in `build.yaml` is only the default for local builds. Add a section for the version to `CHANGELOG.md` before tagging: only that section is used as the release notes.
+Pushing a tag `v*` (for example `v12.4.1.0`) runs `.github/workflows/publish.yaml`: it builds the zip with jprm (renamed `Jellyfin.Plugin.MailConcierge_<targetAbi>.zip` without the last `.0`, for example `…_12.4.0.zip`), creates the GitHub release with the zip, adds the version (MD5 checksum, release asset `sourceUrl`, timestamp) to `manifest.json` and commits it to `main`. The build comes from the pushed tag, and the **tag drives the version** (`--version`), so `version` in `build.yaml` is only the default for local builds. Add a section for the version to `CHANGELOG.md` before tagging: only that section is used as the release notes.
 
 ## License
 

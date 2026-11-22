@@ -540,11 +540,26 @@
                 return;
             }
             storeSet(USERNAME_KEY, '');
-            window.location.href = BASE + '/MailConcierge/Reset?s=' + encodeURIComponent(body.session);
+            openReset(body.session);
         }, function (e) {
             log(e);
             fail();
         });
+    }
+
+    // Opens the reset page with the session in a POST body, so it never appears in the address or the history.
+    function openReset(session) {
+        const form = document.createElement('form');
+        form.method = 'post';
+        form.action = BASE + '/MailConcierge/Open/reset';
+        form.hidden = true;
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 's';
+        input.value = session;
+        form.appendChild(input);
+        document.body.appendChild(form);
+        form.submit();
     }
 
     function onSubmitCapture(e) {

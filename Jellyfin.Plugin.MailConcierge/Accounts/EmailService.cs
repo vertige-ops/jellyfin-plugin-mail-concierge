@@ -484,7 +484,7 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
                     {
                         ["username"] = user.Username,
                         ["serverName"] = ServerName(),
-                        ["cancelLink"] = cfg.PublicUrl.TrimEnd('/') + "/MailConcierge/Cancel?t=" + cancelToken,
+                        ["cancelLink"] = cfg.PublicUrl.TrimEnd('/') + "/MailConcierge/Cancel#t=" + cancelToken,
                         ["expires"] = Languages.FormatDateTime(cancelExpires, _time.LocalTimeZone, lang),
                     };
                     var (subject, html, text) = EmailTemplates.Render("email-changed", lang, values, cfg.TemplateOverrides);
@@ -662,7 +662,7 @@ public sealed partial class EmailService : IEventConsumer<UserDeletedEventArgs>
         {
             ["username"] = username,
             ["serverName"] = ServerName(),
-            ["link"] = cfg.PublicUrl.TrimEnd('/') + "/MailConcierge/Confirm?t=" + token,
+            ["link"] = cfg.PublicUrl.TrimEnd('/') + "/MailConcierge/Confirm#t=" + token,
             ["expires"] = FormatDate(expires, lang),
         };
         var (subject, html, text) = EmailTemplates.Render("confirm-email", lang, values, cfg.TemplateOverrides);

@@ -29,7 +29,7 @@ public sealed class AccountControllerTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "mailconcierge-account-" + Guid.NewGuid().ToString("N"));
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero));
-    private readonly PluginConfiguration _config = new() { PublicUrl = "https://jf.example/", SmtpHost = "smtp.example", FromAddress = "jf@example.com" };
+    private readonly PluginConfiguration _config = new() { Enabled = true, PublicUrl = "https://jf.example/", SmtpHost = "smtp.example", FromAddress = "jf@example.com" };
     private readonly Mock<IUserManager> _users = new();
     private readonly ProxyGuard _guard = Guards.Quiet();
     private readonly MailConciergeStore _store;
@@ -42,7 +42,7 @@ public sealed class AccountControllerTests : IDisposable
         Directory.CreateDirectory(_dir);
         _store = new MailConciergeStore(_dir);
         var limiter = new RateLimiter(_time);
-        _queue = new EmailQueue(() => _config, Mock.Of<IEmailTransport>(), limiter, NullLogger<EmailQueue>.Instance, _time);
+        _queue = new EmailQueue(() => _config, Mock.Of<IEmailTransport>(), NullLogger<EmailQueue>.Instance, _time);
         var closer = new SessionCloser(Mock.Of<IDeviceManager>(), Mock.Of<ISessionManager>(), _time, NullLogger<SessionCloser>.Instance);
         var email = new EmailService(_store, new TokenService(_dir), limiter, _queue, _users.Object, closer, new NullSeerrSync(), Mock.Of<IServerApplicationHost>(), () => _config, new ServiceGate(() => _config, _guard), _time, NullLogger<EmailService>.Instance);
         _controller = new AccountController(email, null!, _users.Object, () => _config)

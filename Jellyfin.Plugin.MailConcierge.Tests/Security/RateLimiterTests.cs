@@ -237,4 +237,62 @@ public class RateLimiterTests
     [Fact]
     public void Key_MappedIpv4_Unwrapped() =>
         Assert.Equal("192.0.2.7", ClientIp.Key(IPAddress.Parse("::ffff:192.0.2.7")));
+
+    [Fact]
+    public void CountInWindow_ReturnsHitsInsideWindow()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new RateLimiter(time);
+        var hour = TimeSpan.FromHours(1);
+        limiter.TryAcquire("b", "global", 10, hour);
+        time.Advance(TimeSpan.FromMinutes(10));
+        limiter.TryAcquire("b", "global", 10, hour);
+        limiter.TryAcquire("b", "global", 10, hour);
+
+        Assert.Equal(3, limiter.CountInWindow("b", "global", hour));
+        Assert.Equal(0, limiter.CountInWindow("other", "global", hour));
+    }
+
+    [Fact]
+    public void CountInWindow_IgnoresOldHitsAndUnknownKeys()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new RateLimiter(time);
+        var hour = TimeSpan.FromHours(1);
+        limiter.TryAcquire("b", "global", 10, hour);
+        time.Advance(TimeSpan.FromMinutes(40));
+        limiter.TryAcquire("b", "global", 10, hour);
+
+        time.Advance(TimeSpan.FromMinutes(20));
+
+        // The first hit is exactly one hour old: out of the window, as TryAcquire would treat it.
+        Assert.Equal(1, limiter.CountInWindow("b", "global", hour));
+        time.Advance(TimeSpan.FromMinutes(41));
+        Assert.Equal(0, limiter.CountInWindow("b", "global", hour));
+        Assert.Equal(0, limiter.CountInWindow("b", "unknown", hour));
+    }
+
+    [Fact]
+    public void CountInWindow_DoesNotConsumeOrCreateEntry()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new RateLimiter(time);
+        var hour = TimeSpan.FromHours(1);
+
+        Assert.Equal(0, limiter.CountInWindow("b", "global", hour));
+        Assert.Equal(0, limiter.Count);
+
+        Assert.True(limiter.TryAcquire("b", "global", 2, hour));
+        var sweeps = limiter.SweepCount;
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.Equal(1, limiter.CountInWindow("b", "global", hour));
+        }
+
+        Assert.Equal(1, limiter.Count);
+        Assert.Equal(sweeps, limiter.SweepCount);
+        Assert.True(limiter.TryAcquire("b", "global", 2, hour));
+        Assert.False(limiter.TryAcquire("b", "global", 2, hour));
+        Assert.Equal(2, limiter.CountInWindow("b", "global", hour));
+    }
 }

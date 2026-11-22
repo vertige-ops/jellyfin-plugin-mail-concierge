@@ -13,6 +13,19 @@ The project overview is in the [README](../README.md).
 
 ## Delivered
 
+### 12.4.1.0: solid foundations (November 2026)
+
+- A "Live TV" checkbox on each invitation, so that invited accounts get live TV only when you choose.
+- Refuse to enable the plugin until the public URL, a valid SMTP host and port and the sender address are complete, and reject a URL typed in the SMTP host field.
+- SMTP presets (Gmail, Brevo, SMTP2GO, Mailgun, Mailjet) that fill in host, port and security, with a link to the provider's official documentation.
+- Daily e-mail limits (per recipient and for the server) with a warning in the administration page and by e-mail, and the number of e-mails sent per user (read only).
+- Invitation history as a table with a status per invitation, filters, search and a link to the user's page.
+- Links in e-mails carry their token after a `#`, so it never reaches a server log.
+- A translated picture button with a round preview on the account creation page.
+- A setting for the logo in e-mails: inline in the message (the default, shown in the body and not listed as an attachment), loaded from your server, or left out.
+- The help of each field of the administration page sits in an info icon next to the field; links follow the Jellyfin look.
+- A review of the default rights given to a new account.
+
 ### 12.4.0.0 (for Jellyfin 12.4 and later 12.x)
 
 - Sign in with the confirmed e-mail address (off by default).
@@ -25,23 +38,11 @@ The project overview is in the [README](../README.md).
 
 Bug and security fixes only, for Jellyfin 12.1 to 12.3.
 
-## 12.4.1.0: solid foundations (coming days, November 2026)
-
-- A "Live TV" checkbox on each invitation, so that invited accounts get live TV only when you choose.
-- Move the reset token out of the URL.
-- Refuse to enable the plugin until the SMTP settings are valid, and reject a URL typed in the SMTP host field.
-- SMTP presets (for example Google, Proton, Custom) that fill in host, port and security, with a link to the provider's official documentation.
-- E-mail budget counters in the administration page, with the number of e-mails sent per user (read only).
-- Invitation list: a status badge per invitation and a confirmation before revoking.
-- Public pages: show which account the page is about.
-- Profile: a single current-password field, and a translated picture button with a preview.
-- A setting to turn off the logo in e-mails, or to embed it in the message instead of loading it from your server.
-- A review of the default rights given to a new account.
-
 ## 12.4.2.0: comfort and robustness (early December 2026)
 
+- Public pages: show which account the page is about.
+- Profile: a single current-password field.
 - A persistent e-mail queue with spaced retries and a visible send status per invitation. Codes are regenerated at each retry and never stored in clear.
-- An optional e-mail to administrators when an e-mail limit is reached, with a report of how many e-mails each user received.
 - Access profiles (predefined sets of libraries and Live TV) for invitations.
 - A daily cap of e-mail change requests per user.
 - Re-encoding of uploaded avatars.
@@ -65,4 +66,4 @@ Each of these opens a new way into an account, so each gets a full security revi
 
 ## Versioning
 
-`<Jellyfin major>.<Jellyfin minor>.<plugin release>.<fix>`: the first two numbers are the Jellyfin version the release is built for (12.4 for Jellyfin 12.4), the third grows with each feature release on that version, the fourth with each fix. The next feature release on Jellyfin 12.4 is 12.4.1.0; a fix to 12.4.0.0 would be 12.4.0.1. The exact Jellyfin version required is the `targetAbi` in `manifest.json`. A new Jellyfin version starts a new series (12.5.0.0, 13.0.0.0); older releases stay available for older servers.
+`<Jellyfin major>.<Jellyfin minor>.<plugin release>.<fix>`: the first two numbers are the Jellyfin version the release is built for (12.4 for Jellyfin 12.4), the third grows with each feature release on that version, the fourth with each fix. The next feature release on Jellyfin 12.4 is 12.4.2.0; a fix to 12.4.1.0 would be 12.4.1.1. The exact Jellyfin version required is the `targetAbi` in `manifest.json`. A new Jellyfin version starts a new series (12.5.0.0, 13.0.0.0); older releases stay available for older servers.

@@ -1,0 +1,9 @@
+Subject: Mail Concierge : une limite quotidienne d’e-mails a été atteinte
+
+Bonjour,
+
+{{detail}}
+
+Les e-mails au-delà de la limite n’ont pas été envoyés. Les personnes concernées peuvent réessayer plus tard : le décompte porte sur les dernières 24 heures et se libère avec le temps.
+
+Vous pouvez modifier les limites dans les réglages de Mail Concierge, onglet Général. Cet avis est envoyé au plus une fois par jour pour chaque limite, et il ne contient jamais d’adresse.

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Net.Mime;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.MailConcierge.Accounts;
 using Jellyfin.Plugin.MailConcierge.Data;
@@ -31,6 +32,7 @@ public sealed class PublicController : ControllerBase
     // A 1 MiB picture is about 1.4 MB in base64, plus the other fields.
     private const int MaxAcceptBodyBytes = 1_600_000;
 
+    private static readonly Regex TokenShape = new(@"^[A-Za-z0-9_-]{1,128}\z", RegexOptions.Compiled | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     private static readonly TimeSpan PageViewWindow = TimeSpan.FromMinutes(5);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -66,9 +68,9 @@ public sealed class PublicController : ControllerBase
     /// <summary>
     /// Shows the new-password page. The token is not consumed.
     /// </summary>
-    /// <param name="t">The token of the e-mailed link.</param>
-    /// <param name="s">A reset session already obtained from a PIN.</param>
-    /// <returns>The page; the generic message page while the service is closed.</returns>
+    /// <param name="t">The token of a legacy e-mailed link (query string).</param>
+    /// <param name="s">A reset session already obtained from a PIN (legacy query string).</param>
+    /// <returns>The page; the entry page when the address carries neither; the generic message page while the service is closed.</returns>
     [HttpGet("Reset")]
     [Produces(MediaTypeNames.Text.Html)]
     public async Task<ActionResult> Reset([FromQuery] string? t, [FromQuery] string? s)
@@ -78,26 +80,14 @@ public sealed class PublicController : ControllerBase
             return TooManyPage();
         }
 
-        if (!_gate.IsOpen || (string.IsNullOrWhiteSpace(t) && string.IsNullOrWhiteSpace(s)))
-        {
-            return Page("message");
-        }
-
-        // A link that is used, expired or unknown gets the same page as an invalid invitation.
-        if (!string.IsNullOrWhiteSpace(t) && string.IsNullOrWhiteSpace(s) && !await _recovery.IsLinkValidAsync(t).ConfigureAwait(false))
-        {
-            return Page("message");
-        }
-
-        // The language the account's e-mails are sent in, the browser's only when the link tells nothing.
-        return Page("reset", string.IsNullOrWhiteSpace(t) ? null : await _recovery.PeekLinkLanguageAsync(t).ConfigureAwait(false));
+        return string.IsNullOrWhiteSpace(t) && string.IsNullOrWhiteSpace(s) ? Entry("reset") : await ResetCore(t, s).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Shows the e-mail confirmation page. The token is not consumed.
     /// </summary>
-    /// <param name="t">The token of the e-mailed link.</param>
-    /// <returns>The page; the generic message page while the service is closed.</returns>
+    /// <param name="t">The token of a legacy e-mailed link (query string).</param>
+    /// <returns>The page; the entry page without token; the generic message page while the service is closed.</returns>
     [HttpGet("Confirm")]
     [Produces(MediaTypeNames.Text.Html)]
     public async Task<ActionResult> ConfirmPage([FromQuery] string? t)
@@ -107,14 +97,14 @@ public sealed class PublicController : ControllerBase
             return TooManyPage();
         }
 
-        return !_gate.IsOpen || string.IsNullOrWhiteSpace(t) ? Page("message") : Page("confirm", await _email.PeekLanguageAsync(t, TokenPurpose.ConfirmEmail).ConfigureAwait(false));
+        return string.IsNullOrWhiteSpace(t) ? Entry("confirm") : await ConfirmCore(t).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Shows the e-mail change cancellation page. The token is not consumed.
     /// </summary>
-    /// <param name="t">The token of the e-mailed link.</param>
-    /// <returns>The page; the generic message page while the service is closed.</returns>
+    /// <param name="t">The token of a legacy e-mailed link (query string).</param>
+    /// <returns>The page; the entry page without token; the generic message page while the service is closed.</returns>
     [HttpGet("Cancel")]
     [Produces(MediaTypeNames.Text.Html)]
     public async Task<ActionResult> CancelPage([FromQuery] string? t)
@@ -124,14 +114,14 @@ public sealed class PublicController : ControllerBase
             return TooManyPage();
         }
 
-        return !_gate.IsOpen || string.IsNullOrWhiteSpace(t) ? Page("message") : Page("cancel", await _email.PeekLanguageAsync(t, TokenPurpose.CancelEmailChange).ConfigureAwait(false));
+        return string.IsNullOrWhiteSpace(t) ? Entry("cancel") : await CancelCore(t).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Shows the account creation page of an invitation. The invitation is not consumed.
     /// </summary>
-    /// <param name="t">The token of the invitation link.</param>
-    /// <returns>The page.</returns>
+    /// <param name="t">The token of a legacy invitation link (query string).</param>
+    /// <returns>The page; the entry page without token.</returns>
     [HttpGet("Accept")]
     [Produces(MediaTypeNames.Text.Html)]
     public async Task<ActionResult> AcceptPage([FromQuery] string? t)
@@ -141,17 +131,39 @@ public sealed class PublicController : ControllerBase
             return TooManyPage();
         }
 
-        var view = string.IsNullOrWhiteSpace(t) ? null : await _invitations.PeekAsync(t, ClientKey()).ConfigureAwait(false);
-        if (view is null)
+        return string.IsNullOrWhiteSpace(t) ? Entry("accept") : await AcceptCore(t).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Opens a page of an e-mailed link from the token the entry page read in the URL fragment. The token travels in the body, never in the address.
+    /// </summary>
+    /// <param name="page">reset, confirm, cancel or accept.</param>
+    /// <param name="t">The token of the link.</param>
+    /// <param name="s">A reset session obtained from a PIN.</param>
+    /// <returns>The same page as the matching GET with a query string; the generic invalid page for anything that is not valid; 404 for an unknown page.</returns>
+    [HttpPost("Open/{page}")]
+    [Produces(MediaTypeNames.Text.Html)]
+    [RequestSizeLimit(MaxBodyBytes)]
+    public async Task<ActionResult> Open(string page, [FromForm] string? t, [FromForm] string? s)
+    {
+        var target = (page ?? string.Empty).ToLowerInvariant();
+        if (target is not ("reset" or "confirm" or "cancel" or "accept"))
         {
-            return Page("acceptinvalid");
+            return NotFound();
         }
 
-        // The language the administrator chose for the invitation, the browser's only as a fallback.
-        var language = Languages.IsSupported(view.Language) ? view.Language : _renderer.PickLanguage(Request.Headers.AcceptLanguage.ToString());
-        var result = _renderer.Render("accept", language, new { username = view.ProposedUsername, email = view.Email ?? string.Empty });
-        SecurityHeaders.Apply(Response, result.Nonce);
-        return result;
+        if (TooManyPageViews())
+        {
+            return TooManyPage();
+        }
+
+        return target switch
+        {
+            "reset" => await ResetCore(t, s).ConfigureAwait(false),
+            "confirm" => await ConfirmCore(t).ConfigureAwait(false),
+            "cancel" => await CancelCore(t).ConfigureAwait(false),
+            _ => await AcceptCore(t).ConfigureAwait(false),
+        };
     }
 
     /// <summary>
@@ -359,9 +371,74 @@ public sealed class PublicController : ControllerBase
         return Content(content, type, Encoding.UTF8);
     }
 
-    private ActionResult Page(string page, string? pageLanguage = null)
+    private async Task<ActionResult> ResetCore(string? t, string? s)
     {
-        var result = _renderer.Render(page, Languages.Parse(pageLanguage) ?? Language(), new { });
+        var hasToken = !string.IsNullOrWhiteSpace(t);
+        var hasSession = !string.IsNullOrWhiteSpace(s);
+        if (!_gate.IsOpen || (!hasToken && !hasSession) || (hasToken && !IsTokenShape(t)) || (hasSession && !IsTokenShape(s)))
+        {
+            return Page("message");
+        }
+
+        // A link that is used, expired or unknown gets the same page as an invalid invitation.
+        if (hasToken && !hasSession && !await _recovery.IsLinkValidAsync(t!).ConfigureAwait(false))
+        {
+            return Page("message");
+        }
+
+        // The language the account's e-mails are sent in, the browser's only when the link tells nothing.
+        var language = hasToken ? await _recovery.PeekLinkLanguageAsync(t!).ConfigureAwait(false) : null;
+        return Page("reset", language, new { token = hasToken ? t!.Trim() : null, session = hasSession ? s!.Trim() : null });
+    }
+
+    private async Task<ActionResult> ConfirmCore(string? t)
+    {
+        if (!_gate.IsOpen || string.IsNullOrWhiteSpace(t) || !IsTokenShape(t))
+        {
+            return Page("message");
+        }
+
+        return Page("confirm", await _email.PeekLanguageAsync(t.Trim(), TokenPurpose.ConfirmEmail).ConfigureAwait(false), new { token = t.Trim() });
+    }
+
+    private async Task<ActionResult> CancelCore(string? t)
+    {
+        if (!_gate.IsOpen || string.IsNullOrWhiteSpace(t) || !IsTokenShape(t))
+        {
+            return Page("message");
+        }
+
+        return Page("cancel", await _email.PeekLanguageAsync(t.Trim(), TokenPurpose.CancelEmailChange).ConfigureAwait(false), new { token = t.Trim() });
+    }
+
+    private async Task<ActionResult> AcceptCore(string? t)
+    {
+        var view = string.IsNullOrWhiteSpace(t) || !IsTokenShape(t) ? null : await _invitations.PeekAsync(t.Trim(), ClientKey()).ConfigureAwait(false);
+        if (view is null)
+        {
+            return Page("acceptinvalid");
+        }
+
+        // The language the administrator chose for the invitation, the browser's only as a fallback.
+        var language = Languages.IsSupported(view.Language) ? view.Language : _renderer.PickLanguage(Request.Headers.AcceptLanguage.ToString());
+        var result = _renderer.Render("accept", language, new { username = view.ProposedUsername, email = view.Email ?? string.Empty }, new { token = t!.Trim() });
+        SecurityHeaders.Apply(Response, result.Nonce);
+        return result;
+    }
+
+    // Only the characters of a base64url token, so that nothing else is looked up or put in a page.
+    private static bool IsTokenShape(string? value) => value is not null && TokenShape.IsMatch(value.Trim());
+
+    private ActionResult Entry(string target)
+    {
+        var result = _renderer.Render("entry", Language(), new { }, new { target });
+        SecurityHeaders.Apply(Response, result.Nonce);
+        return result;
+    }
+
+    private ActionResult Page(string page, string? pageLanguage = null, object? clientData = null)
+    {
+        var result = _renderer.Render(page, Languages.Parse(pageLanguage) ?? Language(), new { }, clientData);
         SecurityHeaders.Apply(Response, result.Nonce);
         return result;
     }

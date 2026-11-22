@@ -39,7 +39,10 @@ public sealed class AdminControllerTests : IDisposable
     private readonly PluginConfiguration _config = new() { SmtpPassword = "smtp-secret", SeerrApiKey = "seerr-secret", PublicUrl = "https://jf.example/" };
     private readonly Mock<IUserManager> _users = new();
     private readonly EmailQueue _queue;
+    private readonly RateLimiter _limiter;
+    private readonly EmailStats _stats;
     private readonly NetworkConfiguration _net = new() { KnownProxies = Array.Empty<string>() };
+    private readonly Mock<IServerConfigurationManager> _serverConfig = new();
     private readonly ProxyGuard _guard;
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "mailconcierge-admin-" + Guid.NewGuid().ToString("N"));
     private readonly MailConciergeStore _store;
@@ -51,10 +54,11 @@ public sealed class AdminControllerTests : IDisposable
     {
         Directory.CreateDirectory(_dir);
         _store = new MailConciergeStore(_dir);
-        _queue = new EmailQueue(() => _config, Mock.Of<IEmailTransport>(), new RateLimiter(_time), NullLogger<EmailQueue>.Instance, _time);
-        var cfg = new Mock<IServerConfigurationManager>();
-        cfg.Setup(c => c.GetConfiguration("network")).Returns(() => _net);
-        _guard = new ProxyGuard(cfg.Object);
+        _limiter = new RateLimiter(_time);
+        _stats = new EmailStats(_time);
+        _queue = new EmailQueue(() => _config, Mock.Of<IEmailTransport>(), NullLogger<EmailQueue>.Instance, _time, stats: _stats);
+        _serverConfig.Setup(c => c.GetConfiguration("network")).Returns(() => _net);
+        _guard = new ProxyGuard(_serverConfig.Object);
         Rebuild();
     }
 
@@ -77,6 +81,62 @@ public sealed class AdminControllerTests : IDisposable
         Assert.Equal(string.Empty, root.GetProperty("seerrApiKey").GetString());
         Assert.True(root.GetProperty("smtpPasswordSet").GetBoolean());
         Assert.True(root.GetProperty("seerrApiKeySet").GetBoolean());
+    }
+
+    [Fact]
+    public void GetConfig_SuggestsThePublicUrlPublishedInJellyfin_WithoutStoringIt()
+    {
+        _config.PublicUrl = string.Empty;
+        _net.PublishedServerUriBySubnet = new[] { "192.168.0.0/24=http://192.168.0.2:8096", "all=https://jf.example.org" };
+
+        var root = JsonDocument.Parse(Assert.IsType<ContentResult>(_controller.GetConfig()).Content!).RootElement;
+
+        Assert.Equal("https://jf.example.org", root.GetProperty("suggestedPublicUrl").GetString());
+        Assert.Equal(string.Empty, root.GetProperty("publicUrl").GetString());
+        Assert.Equal(string.Empty, _config.PublicUrl);
+        Assert.Equal(0, _saves);
+    }
+
+    [Fact]
+    public void GetConfig_SuggestedPublicUrlIsNull_WhenNothingUsableIsPublished()
+    {
+        _net.PublishedServerUriBySubnet = new[] { "192.168.0.0/24=http://192.168.0.2:8096", "external=ftp://ext.example.org" };
+
+        var root = JsonDocument.Parse(Assert.IsType<ContentResult>(_controller.GetConfig()).Content!).RootElement;
+
+        Assert.True(root.TryGetProperty("suggestedPublicUrl", out var suggestion));
+        Assert.Equal(JsonValueKind.Null, suggestion.ValueKind);
+    }
+
+    [Fact]
+    public void GetConfig_SuggestedPublicUrlIsNull_WhenTheNetworkConfigurationCannotBeRead()
+    {
+        _serverConfig.Setup(c => c.GetConfiguration("network")).Throws(new InvalidOperationException("boom"));
+
+        var result = Assert.IsType<ContentResult>(_controller.GetConfig());
+
+        Assert.Equal(StatusCodes.Status200OK, result.StatusCode);
+        var root = JsonDocument.Parse(result.Content!).RootElement;
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("suggestedPublicUrl").ValueKind);
+        Assert.True(root.GetProperty("smtpPasswordSet").GetBoolean());
+    }
+
+    [Fact]
+    public void SmtpPresets_ReturnsTheListWithoutCaching()
+    {
+        var result = Assert.IsType<ContentResult>(_controller.SmtpPresets());
+
+        Assert.Equal(StatusCodes.Status200OK, result.StatusCode);
+        Assert.Equal("no-store", _controller.Response.Headers.CacheControl.ToString());
+        var items = JsonDocument.Parse(result.Content!).RootElement.EnumerateArray().ToList();
+        Assert.Equal(new[] { "gmail", "brevo", "smtp2go", "mailgun", "mailjet" }, items.Select(i => i.GetProperty("id").GetString()));
+        var mailgun = items.Single(i => i.GetProperty("id").GetString() == "mailgun");
+        Assert.Equal("Mailgun", mailgun.GetProperty("name").GetString());
+        Assert.Equal("smtp.eu.mailgun.org", mailgun.GetProperty("host").GetString());
+        Assert.Equal(587, mailgun.GetProperty("port").GetInt32());
+        Assert.Equal("starttls", mailgun.GetProperty("security").GetString());
+        Assert.StartsWith("https://", mailgun.GetProperty("docUrl").GetString(), StringComparison.Ordinal);
+        Assert.Equal("2026-11-15", mailgun.GetProperty("checkedOn").GetString());
     }
 
     [Fact]
@@ -329,16 +389,339 @@ public sealed class AdminControllerTests : IDisposable
         Assert.Contains("smtp_server_changed", result.Content!, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("https://smtp.example.org")]
+    [InlineData("smtp.example.org:587")]
+    [InlineData("smtp.example.org/x")]
+    [InlineData("user@example.org")]
+    [InlineData("a b")]
+    public void SetConfig_RefusesAWebAddressAsSmtpHost_AndNothingIsStored(string host)
+    {
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = host, PinMinutes = 33 }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("invalid_smtp_host", Code(result));
+        Assert.Equal(string.Empty, _config.SmtpHost);
+        Assert.Equal(30, _config.PinMinutes);
+        Assert.Equal(0, _saves);
+    }
+
+    [Fact]
+    public void SetConfig_AnEmptySmtpHostInTheRequest_IsNotAnInvalidHost()
+    {
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = string.Empty }));
+
+        Assert.Equal(200, result.StatusCode);
+    }
+
+    [Fact]
+    public void SetConfig_EnablingFromDisabled_WithIncompleteSettings_IsRefused_AndNothingIsStored()
+    {
+        _config.Enabled = false;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { Enabled = true, PinMinutes = 33 }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("smtp_incomplete", Code(result));
+        Assert.False(_config.Enabled);
+        Assert.Equal(30, _config.PinMinutes);
+        Assert.Equal(0, _saves);
+    }
+
+    [Theory]
+    [InlineData("PublicUrl")]
+    [InlineData("SmtpHost")]
+    [InlineData("FromAddress")]
+    public void SetConfig_EnablingFromDisabled_IsRefused_WhenOneRequiredSettingIsMissing(string missing)
+    {
+        _config.Enabled = false;
+        CompleteSmtp();
+        typeof(PluginConfiguration).GetProperty(missing)!.SetValue(_config, string.Empty);
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { Enabled = true }));
+
+        Assert.Equal("smtp_incomplete", Code(result));
+        Assert.False(_config.Enabled);
+    }
+
+    [Fact]
+    public void SetConfig_EnablingFromDisabled_IsRefused_WhenThePortWouldBeOutOfRange()
+    {
+        _config.Enabled = false;
+        CompleteSmtp();
+        _config.SmtpPort = 0;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { Enabled = true }));
+
+        Assert.Equal("smtp_incomplete", Code(result));
+        Assert.False(_config.Enabled);
+    }
+
+    [Fact]
+    public void SetConfig_EnablingFromDisabled_IsAccepted_WhenTheMergeIsComplete()
+    {
+        _config.Enabled = false;
+        CompleteSmtp();
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { Enabled = true }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.True(_config.Enabled);
+        Assert.Equal(1, _saves);
+    }
+
+    [Fact]
+    public void SetConfig_EnablingInTheSameRequestThatCompletesTheSettings_IsAccepted()
+    {
+        _config.Enabled = false;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest
+        {
+            Enabled = true,
+            SmtpHost = "smtp.example.org",
+            SmtpPort = 587,
+            FromAddress = "jf@example.org",
+            SmtpPassword = "typed-fake",
+        }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.True(_config.Enabled);
+    }
+
+    [Fact]
+    public void SetConfig_EnablingWithPaddedValues_IsAccepted_AndStoresThemTrimmed()
+    {
+        _config.Enabled = false;
+        _config.PublicUrl = string.Empty;
+        _config.SmtpHost = string.Empty;
+        _config.FromAddress = string.Empty;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest
+        {
+            Enabled = true,
+            PublicUrl = " https://jf.example.org ",
+            SmtpHost = " smtp.example.org ",
+            SmtpPort = 587,
+            FromAddress = "  jf@example.org  ",
+            SmtpPassword = "typed-fake",
+        }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.True(_config.Enabled);
+        Assert.Equal("https://jf.example.org", _config.PublicUrl);
+        Assert.Equal("smtp.example.org", _config.SmtpHost);
+        Assert.Equal("jf@example.org", _config.FromAddress);
+        Assert.Equal(1, _saves);
+    }
+
+    [Fact]
+    public void SetConfig_EnabledAndComplete_HostChangedWithoutRetypingThePassword_IsRefused_AndNothingIsStored()
+    {
+        _config.Enabled = true;
+        CompleteSmtp();
+        var before = JsonSerializer.Serialize(_config);
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "other.example.org", PinMinutes = 33 }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("smtp_server_changed", Code(result));
+        Assert.Equal(before, JsonSerializer.Serialize(_config));
+        Assert.Equal("smtp-secret", _config.SmtpPassword);
+        Assert.Equal(0, _saves);
+    }
+
+    [Fact]
+    public void SetConfig_FillingTheSmtpTab_WhileDisabledAndIncomplete_IsAccepted()
+    {
+        _config.Enabled = false;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "smtp.example.org", SmtpPassword = "typed-fake" }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal("smtp.example.org", _config.SmtpHost);
+        Assert.False(_config.Enabled);
+    }
+
+    [Theory]
+    [InlineData("PinMinutes")]
+    [InlineData("InvitationDays")]
+    [InlineData("MaxEmailsPerDay")]
+    [InlineData("SessionInactiveDays")]
+    public void SetConfig_AlreadyEnabledAndIncomplete_AnyTabIsSaved_WithoutSmtpIncomplete(string field)
+    {
+        _config.Enabled = true;
+        _config.PublicUrl = string.Empty;
+        Assert.False(_config.CanSendEmail());
+        var request = new AdminConfigRequest();
+        typeof(AdminConfigRequest).GetProperty(field)!.SetValue(request, 11);
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(request));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.True(_config.Enabled);
+        Assert.Equal(1, _saves);
+    }
+
+    [Fact]
+    public void SetConfig_AlreadyEnabledAndIncomplete_TheSettingsCanBeCompletedInAnyOrder()
+    {
+        _config.Enabled = true;
+        _config.PublicUrl = string.Empty;
+
+        var requests = new[]
+        {
+            new AdminConfigRequest { FromAddress = "jf@example.org" },
+            new AdminConfigRequest { SeerrEnabled = true, SeerrUrl = "https://seerr.example.org", SeerrApiKey = "typed-fake" },
+            new AdminConfigRequest { Enabled = true, EmailLogin = true },
+            new AdminConfigRequest { PublicUrl = "https://jf.example.org" },
+            new AdminConfigRequest { SmtpHost = "smtp.example.org", SmtpPassword = "typed-fake" },
+            new AdminConfigRequest { PinMinutes = 20 },
+        };
+        foreach (var request in requests)
+        {
+            Assert.Equal(200, Assert.IsType<ContentResult>(_controller.SetConfig(request)).StatusCode);
+        }
+
+        Assert.Equal(requests.Length, _saves);
+        Assert.True(_config.Enabled);
+        Assert.True(_config.CanSendEmail());
+    }
+
+    [Fact]
+    public void SetConfig_AlreadyEnabledAndIncomplete_DisablingIsAccepted()
+    {
+        _config.Enabled = true;
+        _config.PublicUrl = string.Empty;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { Enabled = false }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.False(_config.Enabled);
+    }
+
+    [Fact]
+    public void SetConfig_ClearingTheHostOfACompleteEnabledConfiguration_IsRefused_AndNothingIsStored()
+    {
+        _config.Enabled = true;
+        CompleteSmtp();
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = string.Empty, PinMinutes = 33 }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("smtp_incomplete", Code(result));
+        Assert.Equal("smtp.example.org", _config.SmtpHost);
+        Assert.Equal(30, _config.PinMinutes);
+        Assert.Equal(0, _saves);
+    }
+
+    [Fact]
+    public void SetConfig_ClearingTheHostOfACompleteEnabledConfiguration_IsAccepted_WhenItIsDisabledInTheSameRequest()
+    {
+        _config.Enabled = true;
+        CompleteSmtp();
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = string.Empty, ClearSmtpPassword = true, Enabled = false }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.False(_config.Enabled);
+        Assert.Equal(string.Empty, _config.SmtpHost);
+    }
+
+    [Fact]
+    public void SetConfig_ABadHostCodeComesBeforeTheIncompleteCode()
+    {
+        _config.Enabled = false;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { Enabled = true, SmtpHost = "smtp.example.org:587" }));
+
+        Assert.Equal("invalid_smtp_host", Code(result));
+    }
+
+    [Fact]
+    public void SetConfig_TheIncompleteCodeComesBeforeTheServerChangedCode()
+    {
+        _config.Enabled = false;
+        _config.SmtpHost = "smtp.example.org";
+        _config.PublicUrl = string.Empty;
+        Assert.NotEmpty(_config.SmtpPassword);
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { Enabled = true, SmtpHost = "other.example.org" }));
+
+        Assert.Equal("smtp_incomplete", Code(result));
+        Assert.Equal("smtp.example.org", _config.SmtpHost);
+    }
+
+    [Fact]
+    public void SetConfig_ABadHostCodeComesBeforeTheServerChangedCode()
+    {
+        _config.SmtpHost = "smtp.example.org";
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "other.example.org:25" }));
+
+        Assert.Equal("invalid_smtp_host", Code(result));
+    }
+
+    [Fact]
+    public void SetConfig_AStoredInvalidHost_DoesNotBlockASaveThatDoesNotTouchIt()
+    {
+        _config.Enabled = false;
+        _config.SmtpHost = "smtp.example.org:587";
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { PinMinutes = 33 }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal(33, _config.PinMinutes);
+        Assert.Equal("smtp.example.org:587", _config.SmtpHost);
+    }
+
+    [Fact]
+    public void SetConfig_AStoredInvalidHost_CountsAsIncompleteForEnabling()
+    {
+        _config.Enabled = false;
+        CompleteSmtp();
+        _config.SmtpHost = "smtp.example.org:587";
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { Enabled = true }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("smtp_incomplete", Code(result));
+        Assert.False(_config.Enabled);
+    }
+
+    [Fact]
+    public void SetConfig_AStoredInvalidHost_IsFixedByASaveThatEntersAValidOne()
+    {
+        _config.Enabled = false;
+        CompleteSmtp();
+        _config.SmtpHost = "smtp.example.org:587";
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { Enabled = true, SmtpHost = "smtp.example.org", SmtpPassword = "typed-fake" }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.True(_config.Enabled);
+        Assert.Equal("smtp.example.org", _config.SmtpHost);
+    }
+
+    private static string? Code(ContentResult result) => JsonDocument.Parse(result.Content!).RootElement.GetProperty("code").GetString();
+
+    private void CompleteSmtp()
+    {
+        _config.PublicUrl = "https://jf.example.org";
+        _config.SmtpHost = "smtp.example.org";
+        _config.SmtpPort = 587;
+        _config.FromAddress = "jf@example.org";
+    }
+
     private static readonly JsonSerializerOptions BinderJson = new(JsonSerializerDefaults.Web);
 
     [Theory]
-    [InlineData("{\"smtpHost\":\"x\",\"smtpPort\":25,\"smtpSecurity\":\"None\",\"fromAddress\":\"a@example.org\"}")]
+    [InlineData("{\"smtpHost\":\"smtp.example.org\",\"smtpPort\":25,\"smtpSecurity\":\"None\",\"fromAddress\":\"a@example.org\"}")]
     [InlineData("{\"seerrEnabled\":true,\"seerrUrl\":\"https://seerr.example\"}")]
     public void PostConfig_WithOnlySmtpKeys_KeepsEnabledAndCheckboxes(string json)
     {
         // The body goes through the same JSON deserialization as the MVC binder (camelCase, case-insensitive).
         var request = JsonSerializer.Deserialize<AdminConfigRequest>(json, BinderJson);
-        _config.SmtpHost = "x";
+        CompleteSmtp();
         _config.SmtpSecurity = SmtpSecurity.None;
         _config.SeerrUrl = "https://seerr.example";
         _config.Enabled = true;
@@ -354,6 +737,64 @@ public sealed class AdminControllerTests : IDisposable
     }
 
     [Fact]
+    public void GetConfig_ReturnsTheEmailLogoMode()
+    {
+        Assert.Equal("Embedded", EmailLogoOf(_controller.GetConfig()));
+
+        _config.EmailLogo = EmailLogoMode.Hosted;
+        Assert.Equal("Hosted", EmailLogoOf(_controller.GetConfig()));
+
+        _config.EmailLogo = EmailLogoMode.None;
+        Assert.Equal("None", EmailLogoOf(_controller.GetConfig()));
+    }
+
+    [Theory]
+    [InlineData("Hosted", EmailLogoMode.Hosted)]
+    [InlineData("Embedded", EmailLogoMode.Embedded)]
+    [InlineData("None", EmailLogoMode.None)]
+    [InlineData("none", EmailLogoMode.None)]
+    public void PostConfig_StoresTheEmailLogoMode(string value, EmailLogoMode expected)
+    {
+        _config.EmailLogo = expected == EmailLogoMode.Hosted ? EmailLogoMode.None : EmailLogoMode.Hosted;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { EmailLogo = value }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal(expected, _config.EmailLogo);
+        Assert.Equal(1, _saves);
+    }
+
+    [Fact]
+    public void PostConfig_WithoutEmailLogo_KeepsTheStoredMode()
+    {
+        _config.EmailLogo = EmailLogoMode.None;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { PinMinutes = 17 }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal(17, _config.PinMinutes);
+        Assert.Equal(EmailLogoMode.None, _config.EmailLogo);
+    }
+
+    [Fact]
+    public void PostConfig_UnknownEmailLogo_IsRefused_AndNothingElseOfTheRequestIsStored()
+    {
+        _config.EmailLogo = EmailLogoMode.Hosted;
+
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { EmailLogo = "Bogus", SmtpHost = "changed.example", PinMinutes = 42 }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("invalid_email_logo", JsonDocument.Parse(result.Content!).RootElement.GetProperty("code").GetString());
+        Assert.Equal(EmailLogoMode.Hosted, _config.EmailLogo);
+        Assert.NotEqual("changed.example", _config.SmtpHost);
+        Assert.NotEqual(42, _config.PinMinutes);
+        Assert.Equal(0, _saves);
+    }
+
+    private static string? EmailLogoOf(ActionResult result)
+        => JsonDocument.Parse(Assert.IsType<ContentResult>(result).Content!).RootElement.GetProperty("emailLogo").GetString();
+
+    [Fact]
     public void PostConfig_WithOnlySmtpKeys_KeepsGeneralAndSeerrSettings()
     {
         _config.Enabled = true;
@@ -363,12 +804,12 @@ public sealed class AdminControllerTests : IDisposable
         _config.SeerrEnabled = true;
         _config.SeerrUrl = "https://seerr.example";
         _config.TemplateOverrides["fr/invitation.html"] = "custom";
-        _config.SmtpHost = "x";
+        CompleteSmtp();
 
-        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "x" }));
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { SmtpHost = "smtp.example.org" }));
 
         Assert.Equal(200, result.StatusCode);
-        Assert.Equal("x", _config.SmtpHost);
+        Assert.Equal("smtp.example.org", _config.SmtpHost);
         Assert.True(_config.Enabled);
         Assert.Equal("fr", _config.DefaultLanguage);
         Assert.Equal(17, _config.PinMinutes);
@@ -384,9 +825,10 @@ public sealed class AdminControllerTests : IDisposable
     [InlineData("SmtpPort", 0)]
     [InlineData("SmtpPort", 65536)]
     [InlineData("PinMinutes", 0)]
-    [InlineData("MaxRecoveryEmailsPerHour", -1)]
-    [InlineData("MaxInvitationEmailsPerHour", 0)]
-    [InlineData("MaxAccountEmailsPerHour", -1)]
+    [InlineData("MaxEmailsPerRecipientPerDay", -1)]
+    [InlineData("MaxEmailsPerRecipientPerDay", 1001)]
+    [InlineData("MaxEmailsPerDay", 0)]
+    [InlineData("MaxEmailsPerDay", 10001)]
     public void PostConfig_InvalidNumber_IsRejected_AndNothingSaved(string field, int value)
     {
         var request = new AdminConfigRequest { SmtpHost = "changed" };
@@ -406,6 +848,8 @@ public sealed class AdminControllerTests : IDisposable
     [InlineData("DefaultLanguage", "ja", "invalid_language")]
     [InlineData("SmtpSecurity", "Bogus", "invalid_smtp_security")]
     [InlineData("SessionsOnReset", "7", "invalid_sessions")]
+    [InlineData("EmailLogo", "Bogus", "invalid_email_logo")]
+    [InlineData("EmailLogo", "7", "invalid_email_logo")]
     public void PostConfig_InvalidValue_IsRejectedWithCode(string field, string value, string code)
     {
         var request = new AdminConfigRequest();
@@ -515,6 +959,7 @@ public sealed class AdminControllerTests : IDisposable
     [Fact]
     public async Task Status_ReportsServiceOpen()
     {
+        _config.Enabled = true;
         Assert.True((await StatusRoot()).GetProperty("serviceOpen").GetBoolean());
 
         _config.Enabled = false;
@@ -526,6 +971,147 @@ public sealed class AdminControllerTests : IDisposable
         ctx.Request.Headers["X-Forwarded-For"] = "203.0.113.5";
         _guard.Observe(ctx);
         Assert.False((await StatusRoot()).GetProperty("serviceOpen").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Status_EmailQuota_HasTheDocumentedShape_WithTheConfiguredLimits()
+    {
+        _config.MaxEmailsPerDay = 7;
+        _config.MaxEmailsPerRecipientPerDay = 3;
+
+        var quota = (await StatusRoot()).GetProperty("emailQuota");
+
+        Assert.Equal(
+            new[] { "limit", "limitReachedAt", "perRecipientLimit", "recipientsBlocked", "used", "windowHours" },
+            quota.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+        Assert.Equal(7, quota.GetProperty("limit").GetInt32());
+        Assert.Equal(3, quota.GetProperty("perRecipientLimit").GetInt32());
+        Assert.Equal(24, quota.GetProperty("windowHours").GetInt32());
+        Assert.Equal(0, quota.GetProperty("used").GetInt32());
+        Assert.Equal(0, quota.GetProperty("recipientsBlocked").GetInt32());
+        Assert.Equal(JsonValueKind.Null, quota.GetProperty("limitReachedAt").ValueKind);
+        Assert.False((await StatusRoot()).TryGetProperty("emailBudgets", out _));
+    }
+
+    [Fact]
+    public async Task Status_EmailQuota_ReflectsTheQueuedMessages_TheReachedLimit_AndTheWindow()
+    {
+        _config.PublicUrl = "https://jf.example";
+        _config.SmtpHost = "smtp.example";
+        _config.FromAddress = "jf@example.com";
+        _config.MaxEmailsPerRecipientPerDay = 2;
+        var message = new EmailMessage("a@example.com", "s", "<p>b</p>", "b", "recovery", Guid.NewGuid());
+        Assert.Equal(EnqueueResult.Queued, _queue.Enqueue(message));
+        Assert.Equal(EnqueueResult.Queued, _queue.Enqueue(message with { Template = "invitation", UserId = null }));
+        Assert.Equal(EnqueueResult.LimitReached, _queue.Enqueue(message));
+        Assert.Equal(EnqueueResult.Queued, _queue.Enqueue(message with { To = "b@example.com" }));
+        Assert.Equal(EnqueueResult.Queued, _queue.Enqueue(message with { Template = "email-changed" }));
+
+        var quota = (await StatusRoot()).GetProperty("emailQuota");
+
+        Assert.Equal(3, quota.GetProperty("used").GetInt32());
+        Assert.Equal(1, quota.GetProperty("recipientsBlocked").GetInt32());
+        Assert.Equal(_time.GetUtcNow(), quota.GetProperty("limitReachedAt").GetDateTimeOffset());
+        Assert.DoesNotContain("example.com", quota.GetRawText(), StringComparison.Ordinal);
+
+        _time.Advance(TimeSpan.FromHours(24) + TimeSpan.FromMinutes(1));
+        var later = (await StatusRoot()).GetProperty("emailQuota");
+        Assert.Equal(0, later.GetProperty("used").GetInt32());
+        Assert.Equal(0, later.GetProperty("recipientsBlocked").GetInt32());
+        Assert.Equal(JsonValueKind.Null, later.GetProperty("limitReachedAt").ValueKind);
+    }
+
+    [Fact]
+    public void SetConfig_SavesTheDailyLimitsAndTheNoticeAddress_AndGetConfigReturnsThem()
+    {
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { MaxEmailsPerDay = 500, MaxEmailsPerRecipientPerDay = 25, AdminNotificationAddress = " admin@example.org " }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal(500, _config.MaxEmailsPerDay);
+        Assert.Equal(25, _config.MaxEmailsPerRecipientPerDay);
+        Assert.Equal("admin@example.org", _config.AdminNotificationAddress);
+        var root = JsonDocument.Parse(Assert.IsType<ContentResult>(_controller.GetConfig()).Content!).RootElement;
+        Assert.Equal(500, root.GetProperty("maxEmailsPerDay").GetInt32());
+        Assert.Equal(25, root.GetProperty("maxEmailsPerRecipientPerDay").GetInt32());
+        Assert.Equal("admin@example.org", root.GetProperty("adminNotificationAddress").GetString());
+        Assert.False(root.TryGetProperty("maxRecoveryEmailsPerHour", out _));
+        Assert.False(root.TryGetProperty("maxRecoveryEmailsPerAccountPerHour", out _));
+    }
+
+    [Fact]
+    public void SetConfig_EmptyNoticeAddress_TurnsTheNoticeOff_AndNullKeepsIt()
+    {
+        _config.AdminNotificationAddress = "admin@example.org";
+
+        _controller.SetConfig(new AdminConfigRequest { PinMinutes = 20 });
+        Assert.Equal("admin@example.org", _config.AdminNotificationAddress);
+
+        _controller.SetConfig(new AdminConfigRequest { AdminNotificationAddress = string.Empty });
+        Assert.Equal(string.Empty, _config.AdminNotificationAddress);
+    }
+
+    [Theory]
+    [InlineData("not an address")]
+    [InlineData("a@b")]
+    [InlineData("a@example.org, b@example.org")]
+    public void SetConfig_InvalidNoticeAddress_IsRejectedWithCode_AndNothingSaved(string address)
+    {
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { AdminNotificationAddress = address, PinMinutes = 20 }));
+
+        Assert.Equal(400, result.StatusCode);
+        Assert.Equal("invalid_admin_address", JsonDocument.Parse(result.Content!).RootElement.GetProperty("code").GetString());
+        Assert.Equal(0, _saves);
+        Assert.Equal(string.Empty, _config.AdminNotificationAddress);
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(1000, 10000)]
+    public void SetConfig_DailyLimitsAtTheBounds_AreAccepted(int perRecipient, int perDay)
+    {
+        var result = Assert.IsType<ContentResult>(_controller.SetConfig(new AdminConfigRequest { MaxEmailsPerRecipientPerDay = perRecipient, MaxEmailsPerDay = perDay }));
+
+        Assert.Equal(200, result.StatusCode);
+        Assert.Equal(perRecipient, _config.MaxEmailsPerRecipientPerDay);
+        Assert.Equal(perDay, _config.MaxEmailsPerDay);
+    }
+
+    [Fact]
+    public void EmailStats_ReturnsTheSnapshotShape()
+    {
+        var alice = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001");
+        var bob = Guid.Parse("bbbbbbbb-0000-0000-0000-000000000002");
+        _stats.RecordSent("recovery", alice);
+        _stats.RecordFailed("confirm-email", bob);
+        _stats.RecordSent("invitation", null);
+        _stats.RecordFailed("invitation", null);
+
+        var result = Assert.IsType<ContentResult>(_controller.GetEmailStats());
+
+        Assert.Equal(StatusCodes.Status200OK, result.StatusCode);
+        var root = JsonDocument.Parse(result.Content!).RootElement;
+        Assert.Equal(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero), root.GetProperty("since").GetDateTimeOffset());
+        Assert.Equal(1, root.GetProperty("invitations").GetProperty("sent").GetInt32());
+        Assert.Equal(1, root.GetProperty("invitations").GetProperty("failed").GetInt32());
+        var users = root.GetProperty("users").EnumerateArray().ToArray();
+        Assert.Equal(2, users.Length);
+        Assert.Equal(alice.ToString(), users[0].GetProperty("userId").GetString());
+        Assert.Equal(1, users[0].GetProperty("sent").GetInt32());
+        Assert.Equal(0, users[0].GetProperty("failed").GetInt32());
+        Assert.Equal(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero), users[0].GetProperty("lastSentAt").GetDateTimeOffset());
+        Assert.Equal(bob.ToString(), users[1].GetProperty("userId").GetString());
+        Assert.Equal(1, users[1].GetProperty("failed").GetInt32());
+        Assert.Equal(JsonValueKind.Null, users[1].GetProperty("lastSentAt").ValueKind);
+        Assert.DoesNotContain("@", result.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EmailStats_WhenEmpty_ReturnsEmptyLists()
+    {
+        var root = JsonDocument.Parse(Assert.IsType<ContentResult>(_controller.GetEmailStats()).Content!).RootElement;
+
+        Assert.Equal(0, root.GetProperty("users").GetArrayLength());
+        Assert.Equal(0, root.GetProperty("invitations").GetProperty("sent").GetInt32());
     }
 
     [Fact]
@@ -604,10 +1190,12 @@ public sealed class AdminControllerTests : IDisposable
     [Fact]
     public async Task Status_StoreReadFails_ReportsNoSharedAddress_AndTheRestIntact()
     {
+        _config.Enabled = true;
+
         // An unreadable data file: the store read throws.
         await File.WriteAllTextAsync(Path.Combine(_dir, "mailconcierge.json"), "{\"Emails\":[{\"Email\":\"alice@example.org\"", TestContext.Current.CancellationToken);
         var logger = new ListLogger();
-        _controller = new AdminController(_users.Object, _queue, _guard, new ServiceGate(() => _config, _guard), NewEmailService(_queue), _probe, () => _config, _ => _saves++, logger)
+        _controller = new AdminController(_users.Object, _queue, _stats, _guard, new ServiceGate(() => _config, _guard), NewEmailService(_queue), _probe, _serverConfig.Object, () => _config, _ => _saves++, logger)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
@@ -753,10 +1341,10 @@ public sealed class AdminControllerTests : IDisposable
         var transport = new Mock<IEmailTransport>();
         transport.Setup(t => t.SendAsync(It.IsAny<EmailMessage>(), It.IsAny<System.Threading.CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Connection refused by 10.1.2.3:25 (internal-smtp.corp.lan)"));
-        var queue = new EmailQueue(() => _config, transport.Object, new RateLimiter(_time), NullLogger<EmailQueue>.Instance, _time);
+        var queue = new EmailQueue(() => _config, transport.Object, NullLogger<EmailQueue>.Instance, _time);
         var logger = new Mock<Microsoft.Extensions.Logging.ILogger<AdminController>>();
         logger.Setup(l => l.IsEnabled(It.IsAny<Microsoft.Extensions.Logging.LogLevel>())).Returns(true);
-        var controller = new AdminController(_users.Object, queue, _guard, new ServiceGate(() => _config, _guard), NewEmailService(queue), _probe, () => _config, _ => { }, logger.Object)
+        var controller = new AdminController(_users.Object, queue, _stats, _guard, new ServiceGate(() => _config, _guard), NewEmailService(queue), _probe, _serverConfig.Object, () => _config, _ => { }, logger.Object)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
@@ -819,7 +1407,7 @@ public sealed class AdminControllerTests : IDisposable
 
     private void Rebuild()
     {
-        _controller = new AdminController(_users.Object, _queue, _guard, new ServiceGate(() => _config, _guard), NewEmailService(_queue), _probe, () => _config, _ => _saves++, NullLogger<AdminController>.Instance)
+        _controller = new AdminController(_users.Object, _queue, _stats, _guard, new ServiceGate(() => _config, _guard), NewEmailService(_queue), _probe, _serverConfig.Object, () => _config, _ => _saves++, NullLogger<AdminController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };

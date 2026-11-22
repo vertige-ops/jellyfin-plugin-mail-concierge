@@ -37,12 +37,12 @@ public sealed class EmailServiceTests : IDisposable
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero));
     private readonly PluginConfiguration _config = new()
     {
+        Enabled = true,
         PublicUrl = "https://jf.example/",
         SmtpHost = "smtp.example",
         FromAddress = "jf@example.com",
-        MaxRecoveryEmailsPerHour = 100,
-        MaxInvitationEmailsPerHour = 100,
-        MaxAccountEmailsPerHour = 100,
+        MaxEmailsPerRecipientPerDay = 100,
+        MaxEmailsPerDay = 100,
         ConfirmationHours = 48,
         CancelEmailChangeHours = 24,
     };
@@ -66,7 +66,7 @@ public sealed class EmailServiceTests : IDisposable
         _store = new MailConciergeStore(_dir);
         _tokens = new TokenService(_dir);
         var limiter = new RateLimiter(_time);
-        _queue = new EmailQueue(() => _config, _transport, limiter, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero });
+        _queue = new EmailQueue(() => _config, _transport, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero });
         _queue.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         var host = new Mock<IServerApplicationHost>();
         host.SetupGet(h => h.FriendlyName).Returns("My Jellyfin");
@@ -112,7 +112,7 @@ public sealed class EmailServiceTests : IDisposable
         var mail = Assert.Single(await _transport.WaitForAsync(1));
         Assert.Equal("New@Example.org", mail.To);
         Assert.Equal("confirm-email", mail.Template);
-        Assert.Contains("https://jf.example/MailConcierge/Confirm?t=", mail.Text, StringComparison.Ordinal);
+        Assert.Contains("https://jf.example/MailConcierge/Confirm#t=", mail.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("//MailConcierge", mail.Text, StringComparison.Ordinal);
         Assert.Contains("2 novembre 2026", mail.Text, StringComparison.Ordinal);
     }
@@ -371,7 +371,7 @@ public sealed class EmailServiceTests : IDisposable
         var warning = (await _transport.WaitForAsync(2))[1];
         Assert.Equal("old@example.org", warning.To);
         Assert.Equal("email-changed", warning.Template);
-        Assert.Contains("https://jf.example/MailConcierge/Cancel?t=", warning.Text, StringComparison.Ordinal);
+        Assert.Contains("https://jf.example/MailConcierge/Cancel#t=", warning.Text, StringComparison.Ordinal);
         Assert.Contains("1 novembre 2026 12:00", warning.Text, StringComparison.Ordinal);
         Assert.False(await _service.ConfirmAsync(confirm));
         _seerr.Verify(s => s.PushAsync(_bob.Id), Times.Once);
@@ -714,7 +714,7 @@ public sealed class EmailServiceTests : IDisposable
         Assert.False(_gate.IsOpen);
     }
 
-    private static string LinkOf(EmailMessage m) => Regex.Match(m.Text, @"[?]t=([\w-]+)").Groups[1].Value;
+    private static string LinkOf(EmailMessage m) => Regex.Match(m.Text, @"#t=([\w-]+)").Groups[1].Value;
 
     [Theory]
     [InlineData(EnqueueResult.LimitReached, ChangeResult.RateLimited)]
@@ -754,18 +754,19 @@ public sealed class EmailServiceTests : IDisposable
 
     private (EmailService Service, EmailQueue Queue) ServiceWithRefusingQueue(EnqueueResult refusal)
     {
-        // The queue is never started: a full one holds its messages, and a budget of zero refuses the first.
+        // The queue is never started: a full one holds its messages, and a daily limit of one refuses the second.
         var config = new PluginConfiguration
         {
+            Enabled = true,
             PublicUrl = _config.PublicUrl,
             SmtpHost = _config.SmtpHost,
             FromAddress = _config.FromAddress,
             ConfirmationHours = 48,
-            MaxAccountEmailsPerHour = refusal == EnqueueResult.LimitReached ? 0 : 100,
+            MaxEmailsPerDay = refusal == EnqueueResult.LimitReached ? 1 : 100,
         };
         var limiter = new RateLimiter(_time);
-        var queue = new EmailQueue(() => config, _transport, limiter, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero }, capacity: 1);
-        if (refusal == EnqueueResult.QueueFull)
+        var queue = new EmailQueue(() => config, _transport, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero }, capacity: refusal == EnqueueResult.QueueFull ? 1 : 10);
+        if (refusal is EnqueueResult.QueueFull or EnqueueResult.LimitReached)
         {
             Assert.Equal(EnqueueResult.Queued, queue.Enqueue(new EmailMessage("filler@example.org", "s", "h", "t", "confirm-email", null)));
         }

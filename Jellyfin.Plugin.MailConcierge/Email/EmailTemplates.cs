@@ -8,6 +8,7 @@ using System.Net;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Jellyfin.Plugin.MailConcierge.Configuration;
 
 namespace Jellyfin.Plugin.MailConcierge.Email;
 
@@ -22,6 +23,11 @@ public static class EmailTemplates
     // Value key that overrides the logo URL (tests); otherwise it comes from the public URL.
     private const string LogoUrlKey = "logoUrl";
 
+    /// <summary>
+    /// The Content-Id of the inline logo, referenced as <c>cid:</c> + this value in the HTML.
+    /// </summary>
+    public const string LogoContentId = "mailconcierge-logo@mailconcierge.invalid";
+
     // Marker in the HTML templates replaced by the logo header row.
     private const string LogoRowMarker = "{{logoRow}}";
 
@@ -32,11 +38,17 @@ public static class EmailTemplates
     private static readonly SearchValues<char> LanguageSeparators = SearchValues.Create("-_");
     private static readonly Assembly Asm = typeof(EmailTemplates).Assembly;
     private static readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, string>> StringCache = new();
+    private static readonly Lazy<byte[]?> EmbeddedLogo = new(ReadEmbeddedLogo);
 
     /// <summary>
     /// Gets the names of the templates shipped with the plugin.
     /// </summary>
-    public static IReadOnlyList<string> TemplateNames { get; } = new[] { "invitation", "recovery", "confirm-email", "email-changed", "email-change-cancelled", "password-changed" };
+    public static IReadOnlyList<string> TemplateNames { get; } = new[] { "invitation", "recovery", "confirm-email", "email-changed", "email-change-cancelled", "password-changed", "quota-reached" };
+
+    /// <summary>
+    /// Gets or sets where <see cref="LogoBytes"/> reads the logo from; replaced by tests only.
+    /// </summary>
+    internal static Func<byte[]?> LogoSource { get; set; } = static () => EmbeddedLogo.Value;
 
     /// <summary>
     /// Renders a template. Values are HTML-encoded in the HTML part and inserted as-is in the text part.
@@ -47,12 +59,14 @@ public static class EmailTemplates
     /// <param name="language">The language code (e.g. <c>fr</c>).</param>
     /// <param name="values">The placeholder values; a missing placeholder renders empty.</param>
     /// <param name="overrides">The overrides keyed <c>{lang}/{template}.{html|txt}</c>; defaults to the plugin configuration.</param>
+    /// <param name="logoMode">How the logo is delivered; defaults to the plugin configuration (<see cref="EmailLogoMode.Embedded"/> when unreadable).</param>
     /// <returns>The subject, HTML body and text body.</returns>
     public static (string Subject, string Html, string Text) Render(
         string template,
         string language,
         IReadOnlyDictionary<string, string> values,
-        IReadOnlyDictionary<string, string>? overrides = null)
+        IReadOnlyDictionary<string, string>? overrides = null,
+        EmailLogoMode? logoMode = null)
     {
         if (!TemplateNames.Contains(template))
         {
@@ -68,8 +82,10 @@ public static class EmailTemplates
 
         var (subjectSource, bodySource) = SplitSubject(txtSource);
         var subject = Substitute(subjectSource, values, encode: false).ReplaceLineEndings(" ").Trim();
-        var logoUrl = values.TryGetValue(LogoUrlKey, out var given) ? given : ConfiguredLogoUrl();
-        var html = SubstituteAround(htmlSource, LogoRowMarker, LogoRow(logoUrl), values);
+        var mode = logoMode ?? ConfiguredLogoMode();
+        var hostedUrl = mode == EmailLogoMode.Hosted ? (values.TryGetValue(LogoUrlKey, out var given) ? given : ConfiguredLogoUrl()) : null;
+        var logoRow = LogoRowFor(mode, hostedUrl);
+        var html = SubstituteAround(htmlSource, LogoRowMarker, logoRow, values);
         var text = Substitute(bodySource, values, encode: false);
         return (subject, html, text);
     }
@@ -190,6 +206,50 @@ public static class EmailTemplates
         return publicUrl.Trim().TrimEnd('/') + "/MailConcierge/assets/logo.png";
     }
 
+    /// <summary>
+    /// Gets the bytes of the logo shipped as an embedded resource.
+    /// </summary>
+    /// <returns>The PNG bytes, or null when the resource cannot be read.</returns>
+    internal static byte[]? LogoBytes() => LogoSource();
+
+    private static byte[]? ReadEmbeddedLogo()
+    {
+        try
+        {
+            using var stream = Asm.GetManifestResourceStream("Jellyfin.Plugin.MailConcierge.Resources.Pages.logo.png");
+            if (stream is null)
+            {
+                return null;
+            }
+
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            return buffer.ToArray();
+        }
+#pragma warning disable CA1031 // An unreadable decorative logo only means no logo.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            return null;
+        }
+    }
+
+    // A cosmetic logo must never prevent an e-mail from being sent, so an unreadable configuration means the default mode.
+    private static EmailLogoMode ConfiguredLogoMode()
+    {
+        try
+        {
+            var mode = Plugin.Instance?.Configuration.EmailLogo;
+            return mode is { } m && Enum.IsDefined(m) ? m : EmailLogoMode.Embedded;
+        }
+#pragma warning disable CA1031 // Any failure reading the configuration falls back to the default mode.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            return EmailLogoMode.Embedded;
+        }
+    }
+
     // A cosmetic logo must never prevent an e-mail from being sent, so an unreadable configuration just means no logo.
     private static string? ConfiguredLogoUrl()
     {
@@ -205,11 +265,25 @@ public static class EmailTemplates
         }
     }
 
-    // The logo header row of the HTML templates; nothing when there is no logo URL, so no broken image is shown.
-    private static string LogoRow(string? logoUrl)
-        => string.IsNullOrEmpty(logoUrl)
+    /// <summary>
+    /// Builds the logo header row for a delivery mode: the hosted address, the <c>cid:</c> reference of the inline logo, or nothing.
+    /// </summary>
+    /// <param name="mode">How the logo is delivered.</param>
+    /// <param name="hostedUrl">The address of the hosted logo; empty means no row in <see cref="EmailLogoMode.Hosted"/> mode.</param>
+    /// <returns>The table row, or an empty string when there is no logo to show.</returns>
+    internal static string LogoRowFor(EmailLogoMode mode, string? hostedUrl)
+        => mode switch
+        {
+            EmailLogoMode.Hosted => LogoRow(hostedUrl),
+            EmailLogoMode.None => string.Empty,
+            _ => LogoBytes() is null ? string.Empty : LogoRow("cid:" + LogoContentId),
+        };
+
+    // The logo header row of the HTML templates, for an image source (URL or cid:); nothing when there is none, so no broken image is shown.
+    private static string LogoRow(string? source)
+        => string.IsNullOrEmpty(source)
             ? string.Empty
-            : "<tr><td align=\"center\" style=\"padding:28px 32px 0\"><img src=\"" + WebUtility.HtmlEncode(logoUrl)
+            : "<tr><td align=\"center\" style=\"padding:28px 32px 0\"><img src=\"" + WebUtility.HtmlEncode(source)
                 + "\" width=\"56\" height=\"56\" alt=\"\" style=\"display:block;border:0;outline:none\"></td></tr>";
 
     // The logo row goes in after the placeholders are filled, so nothing inside it (the URL) is read as a placeholder.

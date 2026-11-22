@@ -24,8 +24,8 @@ public class PluginTests
     }
 
     [Fact]
-    public void AssemblyVersion_Is_12_4_0_0()
-        => Assert.Equal(new Version(12, 4, 0, 0), typeof(Plugin).Assembly.GetName().Version);
+    public void AssemblyVersion_Is_12_4_1_0()
+        => Assert.Equal(new Version(12, 4, 1, 0), typeof(Plugin).Assembly.GetName().Version);
 
     private static Guid ReadGuidFromBuildYaml()
     {

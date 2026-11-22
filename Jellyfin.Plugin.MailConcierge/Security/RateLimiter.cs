@@ -104,6 +104,29 @@ public sealed class RateLimiter
     }
 
     /// <summary>
+    /// Counts the attempts a key made within <paramref name="window"/> before now, as <see cref="TryAcquire"/> would count them.
+    /// It only reads: it adds no entry, sweeps nothing and removes no hit.
+    /// It ignores blocks: it counts hits only, so a key that is blocked by <see cref="Penalize"/> still reports the hits it made.
+    /// </summary>
+    /// <param name="bucket">The bucket name.</param>
+    /// <param name="key">The key inside the bucket.</param>
+    /// <param name="window">The window length.</param>
+    /// <returns>The number of attempts in the window; 0 for an unknown key.</returns>
+    public int CountInWindow(string bucket, string key, TimeSpan window)
+    {
+        lock (_lock)
+        {
+            if (!_entries.TryGetValue((bucket, key), out var entry))
+            {
+                return 0;
+            }
+
+            var from = _time.GetUtcNow() - window;
+            return entry.Hits.Count(h => h > from);
+        }
+    }
+
+    /// <summary>
     /// Blocks a key for the given duration.
     /// </summary>
     /// <param name="bucket">The bucket name.</param>

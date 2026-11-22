@@ -1,7 +1,7 @@
 ---
 name: "Mail Concierge"
 guid: "4643600e-9108-4342-8cdd-1ebb049bc033"
-version: "12.4.0.0"
+version: "12.4.1.0"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "E-mail invitations, e-mail password recovery and sign-in by e-mail address for Jellyfin"
@@ -18,5 +18,8 @@ artifacts:
 - "MimeKit.dll"
 - "BouncyCastle.Cryptography.dll"
 changelog: >
-  Sign in with your confirmed e-mail address (off by default), and a series of security and reliability fixes; this release needs Jellyfin 12.4.
-  Jellyfin 12.1 to 12.3 stay on 12.0.0.0.
+  Links in e-mails carry their token after a hash sign so it stays out of server logs; a Live TV checkbox on each invitation (off by default);
+  the plugin starts turned off and refuses to be enabled until the public URL, the SMTP server and the sender are valid; SMTP provider list
+  (Gmail, Brevo, SMTP2GO, Mailgun, Mailjet); invitation history as a table with status, access and filters; e-mail logo setting;
+  e-mail counters in the settings; clearer public pages. If e-mails stop after the update, check the SMTP server (name only), port and sender in the settings.
+  Needs Jellyfin 12.4; Jellyfin 12.1 to 12.3 stay on 12.0.0.0.

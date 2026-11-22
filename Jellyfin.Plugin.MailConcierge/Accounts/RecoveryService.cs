@@ -178,7 +178,7 @@ public sealed class RecoveryService
                 ["username"] = user.Username,
                 ["serverName"] = ServerName(),
                 ["pin"] = pin,
-                ["link"] = cfg.PublicUrl.TrimEnd('/') + "/MailConcierge/Reset?t=" + linkToken,
+                ["link"] = cfg.PublicUrl.TrimEnd('/') + "/MailConcierge/Reset#t=" + linkToken,
                 ["expires"] = Languages.FormatDateTime(expires, _time.LocalTimeZone, language),
             };
             var (subject, html, text) = EmailTemplates.Render("recovery", language, values, cfg.TemplateOverrides);

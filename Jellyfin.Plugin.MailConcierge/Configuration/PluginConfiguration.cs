@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.MailConcierge.Configuration;
 public class PluginConfiguration : BasePluginConfiguration
 {
     /// <summary>Gets or sets a value indicating whether Mail Concierge is enabled.</summary>
-    public bool Enabled { get; set; } = true;
+    public bool Enabled { get; set; }
 
     /// <summary>Gets or sets a value indicating whether the native forgot-password flow of Jellyfin is used instead of Mail Concierge's e-mail recovery.</summary>
     public bool NativeForgotPassword { get; set; }
@@ -76,20 +76,20 @@ public class PluginConfiguration : BasePluginConfiguration
         }
     }
 
-    /// <summary>Gets or sets the recovery e-mails allowed per account per hour.</summary>
+    /// <summary>Gets or sets the recovery e-mails allowed per account per hour. Not shown in the administration page: it protects an account from being flooded.</summary>
     public int MaxRecoveryEmailsPerAccountPerHour { get; set; } = 3;
 
     /// <summary>Gets or sets the forgot-password requests allowed per IP per 15 minutes.</summary>
     public int MaxForgotRequestsPerIpPer15Min { get; set; } = 5;
 
-    /// <summary>Gets or sets the recovery e-mails (code and link, password-changed notice) allowed per hour server-wide. Anonymous visitors can trigger them.</summary>
-    public int MaxRecoveryEmailsPerHour { get; set; } = 10;
+    /// <summary>Gets or sets the e-mails one recipient can receive in 24 hours (any kind: recovery, invitation, confirmation). Settings of earlier versions with hourly limits are no longer read.</summary>
+    public int MaxEmailsPerRecipientPerDay { get; set; } = 10;
 
-    /// <summary>Gets or sets the invitation e-mails allowed per hour server-wide. Only administrators can trigger them, so anonymous requests never use this budget.</summary>
-    public int MaxInvitationEmailsPerHour { get; set; } = 10;
+    /// <summary>Gets or sets the e-mails the server sends in 24 hours, all recipients together. The test e-mail and the notices of an e-mail change are not counted.</summary>
+    public int MaxEmailsPerDay { get; set; } = 200;
 
-    /// <summary>Gets or sets the e-mail confirmation and e-mail change notices allowed per hour server-wide. Signed-in users trigger them.</summary>
-    public int MaxAccountEmailsPerHour { get; set; } = 10;
+    /// <summary>Gets or sets the address told, by e-mail, when a daily limit is reached; empty sends nothing.</summary>
+    public string AdminNotificationAddress { get; set; } = string.Empty;
 
     /// <summary>Gets or sets the PIN failures after which the PIN is invalidated.</summary>
     public int MaxPinFailures { get; set; } = 5;
@@ -102,6 +102,9 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Gets or sets the inactivity threshold in days for <see cref="SessionClosePolicy.InactiveSinceDays"/>.</summary>
     public int SessionInactiveDays { get; set; } = 30;
+
+    /// <summary>Gets or sets how the logo of the e-mails is delivered.</summary>
+    public EmailLogoMode EmailLogo { get; set; } = EmailLogoMode.Embedded;
 
     /// <summary>Gets or sets a value indicating whether the Seerr integration is enabled.</summary>
     public bool SeerrEnabled { get; set; }
@@ -146,11 +149,8 @@ public class PluginConfiguration : BasePluginConfiguration
 #pragma warning restore CA1822
 
     /// <summary>
-    /// Returns whether e-mails can be sent: public URL, SMTP host and sender address are all set.
+    /// Returns whether e-mails can be sent: the SMTP settings are complete (see <see cref="SmtpSettings.IsComplete"/>).
     /// </summary>
     /// <returns>True when e-mail sending is configured.</returns>
-    public bool CanSendEmail()
-        => !string.IsNullOrWhiteSpace(PublicUrl)
-           && !string.IsNullOrWhiteSpace(SmtpHost)
-           && !string.IsNullOrWhiteSpace(FromAddress);
+    public bool CanSendEmail() => SmtpSettings.IsComplete(this);
 }

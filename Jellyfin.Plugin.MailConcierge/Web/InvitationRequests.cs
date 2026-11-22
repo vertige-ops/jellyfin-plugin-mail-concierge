@@ -29,4 +29,5 @@ public sealed record AcceptRequest(string? Token, string? Username, string? Emai
 /// <param name="LibraryIds">The libraries to grant.</param>
 /// <param name="Days">The validity in days, or null for the default.</param>
 /// <param name="Language">The invitation language (fr or en).</param>
-public sealed record CreateInvitationRequest(string? ProposedUsername, string? Email, string[]? LibraryIds, int? Days, string? Language);
+/// <param name="LiveTv">Whether the account gets Live TV access; absent means no.</param>
+public sealed record CreateInvitationRequest(string? ProposedUsername, string? Email, string[]? LibraryIds, int? Days, string? Language, bool? LiveTv = null);

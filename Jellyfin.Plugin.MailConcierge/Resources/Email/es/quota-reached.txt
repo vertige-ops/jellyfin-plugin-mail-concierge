@@ -1,0 +1,9 @@
+Subject: Mail Concierge: se alcanzó un límite diario de correos
+
+Hola:
+
+{{detail}}
+
+Los correos que superan el límite no se enviaron. Las personas afectadas pueden volver a intentarlo más tarde: el recuento abarca las últimas 24 horas y se libera con el tiempo.
+
+Puede cambiar los límites en los ajustes de Mail Concierge, pestaña General. Este aviso se envía como máximo una vez al día por cada límite y nunca contiene una dirección.

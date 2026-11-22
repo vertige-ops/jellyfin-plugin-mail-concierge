@@ -23,7 +23,7 @@ public sealed class IndexInjectionTests
 {
     private const string Index = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Jellyfin</title></head><body>é</body></html>";
 
-    private readonly PluginConfiguration _config = new();
+    private readonly PluginConfiguration _config = new() { Enabled = true };
 
     [Fact]
     public async Task Injects_ScriptOnce_IntoIndexHtml()

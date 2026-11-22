@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Jellyfin.Plugin.MailConcierge.Configuration;
 using Jellyfin.Plugin.MailConcierge.Email;
 using Xunit;
 
 namespace Jellyfin.Plugin.MailConcierge.Tests.Email;
 
+[Collection(LogoSeamCollection.Name)]
 public class EmailTemplatesTests
 {
     private static readonly Dictionary<string, string> NoOverrides = new();
@@ -24,7 +26,7 @@ public class EmailTemplatesTests
         {
             var values = new Dictionary<string, string> { ["serverName"] = "Home", ["logoUrl"] = "https://media.example/MailConcierge/assets/logo.png" };
 
-            var (_, html, _) = EmailTemplates.Render(template, lang, values, NoOverrides);
+            var (_, html, _) = EmailTemplates.Render(template, lang, values, NoOverrides, EmailLogoMode.Hosted);
 
             Assert.Contains("<img src=\"https://media.example/MailConcierge/assets/logo.png\" width=\"56\" height=\"56\" alt=\"\"", html, StringComparison.Ordinal);
             Assert.DoesNotContain("{{logoRow}}", html, StringComparison.Ordinal);
@@ -36,11 +38,117 @@ public class EmailTemplatesTests
     {
         var values = new Dictionary<string, string> { ["serverName"] = "Home", ["logoUrl"] = string.Empty };
 
-        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, NoOverrides);
+        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, NoOverrides, EmailLogoMode.Hosted);
 
         Assert.DoesNotContain("<img", html, StringComparison.Ordinal);
         Assert.DoesNotContain("logoRow", html, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Render_Embedded_ReferencesTheInlineLogoAndNoUrl()
+    {
+        var values = new Dictionary<string, string> { ["serverName"] = "Home", ["logoUrl"] = "https://media.example/MailConcierge/assets/logo.png" };
+
+        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, NoOverrides, EmailLogoMode.Embedded);
+
+        Assert.Contains("<img src=\"cid:mailconcierge-logo@mailconcierge.invalid\" width=\"56\" height=\"56\" alt=\"\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("media.example", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("{{logoRow}}", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_Embedded_DoesNotNeedAPublicUrl()
+    {
+        var values = new Dictionary<string, string> { ["serverName"] = "Home", ["logoUrl"] = string.Empty };
+
+        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, NoOverrides, EmailLogoMode.Embedded);
+
+        Assert.Contains("src=\"cid:mailconcierge-logo@mailconcierge.invalid\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_Embedded_WithAnUnreadableLogoResource_HasNoLogoRow()
+    {
+        using var seam = LogoSeam.Unreadable();
+        var values = new Dictionary<string, string> { ["serverName"] = "Home" };
+
+        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, NoOverrides, EmailLogoMode.Embedded);
+
+        Assert.DoesNotContain("<img", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("cid:", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("logoRow", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_None_HasNoLogoImage()
+    {
+        var values = new Dictionary<string, string> { ["serverName"] = "Home", ["logoUrl"] = "https://media.example/MailConcierge/assets/logo.png" };
+
+        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, NoOverrides, EmailLogoMode.None);
+
+        Assert.DoesNotContain("<img", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("media.example", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("logoRow", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_WithoutAModeUsesTheConfiguration_WhichDefaultsToEmbedded()
+    {
+        var values = new Dictionary<string, string> { ["serverName"] = "Home", ["logoUrl"] = "https://media.example/MailConcierge/assets/logo.png" };
+
+        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, NoOverrides);
+
+        Assert.Contains("src=\"cid:mailconcierge-logo@mailconcierge.invalid\"", html, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(EmailLogoMode.Hosted)]
+    [InlineData(EmailLogoMode.Embedded)]
+    [InlineData(EmailLogoMode.None)]
+    public void Render_CustomTemplateWithoutTheMarker_HasNoLogoInAnyMode(EmailLogoMode mode)
+    {
+        var overrides = new Dictionary<string, string>
+        {
+            ["en/password-changed.txt"] = "Subject: S\n\nBody",
+            ["en/password-changed.html"] = "<p>Hi {{username}}</p>",
+        };
+        var values = new Dictionary<string, string> { ["username"] = "Bob", ["logoUrl"] = "https://media.example/MailConcierge/assets/logo.png" };
+
+        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, overrides, mode);
+
+        Assert.Equal("<p>Hi Bob</p>", html);
+    }
+
+    [Theory]
+    [InlineData(EmailLogoMode.Hosted, "<img src=\"https://media.example/MailConcierge/assets/logo.png\"")]
+    [InlineData(EmailLogoMode.Embedded, "<img src=\"cid:mailconcierge-logo@mailconcierge.invalid\"")]
+    public void Render_CustomTemplateWithTheMarker_FollowsTheMode(EmailLogoMode mode, string expected)
+    {
+        var overrides = new Dictionary<string, string>
+        {
+            ["en/password-changed.txt"] = "Subject: S\n\nBody",
+            ["en/password-changed.html"] = "<table>{{logoRow}}</table>",
+        };
+        var values = new Dictionary<string, string> { ["logoUrl"] = "https://media.example/MailConcierge/assets/logo.png" };
+
+        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, overrides, mode);
+
+        Assert.Contains(expected, html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LogoBytes_ReturnsThePngOfTheEmbeddedResource()
+    {
+        var bytes = EmailTemplates.LogoBytes();
+
+        Assert.NotNull(bytes);
+        Assert.True(bytes.Length > 1000);
+        Assert.Equal(new byte[] { 0x89, 0x50, 0x4E, 0x47 }, bytes[..4]);
+    }
+
+    [Fact]
+    public void LogoContentId_IsTheFixedName()
+        => Assert.Equal("mailconcierge-logo@mailconcierge.invalid", EmailTemplates.LogoContentId);
 
     [Theory]
     [InlineData("https://media.example", "https://media.example/MailConcierge/assets/logo.png")]
@@ -68,7 +176,7 @@ public class EmailTemplatesTests
     {
         var values = new Dictionary<string, string> { ["serverName"] = "Home", ["pin"] = "123456", ["logoUrl"] = "https://media.example/{{pin}}" };
 
-        var (_, html, _) = EmailTemplates.Render("recovery", "en", values, NoOverrides);
+        var (_, html, _) = EmailTemplates.Render("recovery", "en", values, NoOverrides, EmailLogoMode.Hosted);
 
         Assert.DoesNotContain("media.example/123456", html, StringComparison.Ordinal);
     }
@@ -83,7 +191,7 @@ public class EmailTemplatesTests
         };
         var values = new Dictionary<string, string> { ["username"] = "{{logoRow}}", ["logoUrl"] = "https://media.example/MailConcierge/assets/logo.png" };
 
-        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, overrides);
+        var (_, html, _) = EmailTemplates.Render("password-changed", "en", values, overrides, EmailLogoMode.Hosted);
 
         Assert.DoesNotContain("<img", html, StringComparison.Ordinal);
         Assert.Contains("{{logoRow}}", html, StringComparison.Ordinal);

@@ -37,6 +37,7 @@ public sealed class PublicControllerTests : IDisposable
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero));
     private readonly PluginConfiguration _config = new()
     {
+        Enabled = true,
         PublicUrl = "https://jf.example/",
         SmtpHost = "smtp.example",
         FromAddress = "jf@example.com",
@@ -64,7 +65,7 @@ public sealed class PublicControllerTests : IDisposable
         var limiter = new RateLimiter(_time);
         _limiter = limiter;
         var transport = new Mock<IEmailTransport>();
-        var queue = new EmailQueue(() => _config, transport.Object, limiter, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero });
+        var queue = new EmailQueue(() => _config, transport.Object, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero });
         var serverConfig = new Mock<IServerConfigurationManager>();
         serverConfig.Setup(c => c.GetConfiguration("network")).Returns(new NetworkConfiguration { KnownProxies = Array.Empty<string>(), BaseUrl = "/jf" });
         var guard = new ProxyGuard(serverConfig.Object);
@@ -614,6 +615,229 @@ public sealed class PublicControllerTests : IDisposable
 
         Assert.True(_guard.Tripped);
     }
+
+    [Theory]
+    [InlineData("Reset", "reset")]
+    [InlineData("Confirm", "confirm")]
+    [InlineData("Cancel", "cancel")]
+    [InlineData("Accept", "accept")]
+    public async Task Get_WithoutToken_ShowsTheEntryPageOfItsTarget(string route, string target)
+    {
+        var page = Assert.IsType<PageResult>(route switch
+        {
+            "Reset" => await _controller.Reset(null, null),
+            "Confirm" => await _controller.ConfirmPage(null),
+            "Cancel" => await _controller.CancelPage(null),
+            _ => await _controller.AcceptPage(null),
+        });
+
+        Assert.Contains("\"page\":\"entry\"", page.Content, StringComparison.Ordinal);
+        Assert.Contains("\"target\":\"" + target + "\"", page.Content, StringComparison.Ordinal);
+        Assert.Contains("Opening your link", page.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("<form", page.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"token\"", page.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Get_LegacyQuery_CarriesTheTokenAndSessionInTheJsonData()
+    {
+        var link = await SeedLink();
+        var reset = Assert.IsType<PageResult>(await _controller.Reset(link, null));
+        var session = Assert.IsType<PageResult>(await _controller.Reset(null, "sess-1_A"));
+        var (confirm, cancel) = await SeedEmailChangeTokens();
+        var confirmPage = Assert.IsType<PageResult>(await _controller.ConfirmPage(confirm));
+        var cancelPage = Assert.IsType<PageResult>(await _controller.CancelPage(cancel));
+
+        Assert.Equal(link, DataOf(reset).GetProperty("token").GetString());
+        Assert.Equal("sess-1_A", DataOf(session).GetProperty("session").GetString());
+        Assert.Equal(confirm, DataOf(confirmPage).GetProperty("token").GetString());
+        Assert.Equal(cancel, DataOf(cancelPage).GetProperty("token").GetString());
+        Assert.Equal("reset", DataOf(reset).GetProperty("page").GetString());
+        Assert.True(DataOf(reset).TryGetProperty("minPasswordLength", out _));
+    }
+
+    [Fact]
+    public async Task Post_ValidToken_RendersThePage_WithTheTokenOnlyInTheJsonData()
+    {
+        var link = await SeedLink();
+
+        var page = Assert.IsType<PageResult>(await _controller.Open("reset", link, null));
+
+        Assert.Equal(200, page.StatusCode);
+        Assert.Contains("reset-form", page.Content, StringComparison.Ordinal);
+        Assert.Equal(link, DataOf(page).GetProperty("token").GetString());
+        Assert.Equal(1, page.Content!.Split(link).Length - 1);
+        Assert.Equal("no-store", _controller.Response.Headers.CacheControl.ToString());
+        Assert.True(_controller.Response.Headers.ContainsKey("Content-Security-Policy"));
+        foreach (var header in _controller.Response.Headers)
+        {
+            Assert.DoesNotContain(link, header.Value.ToString(), StringComparison.Ordinal);
+        }
+
+        Assert.False(_controller.Response.Headers.ContainsKey("Location"));
+    }
+
+    [Fact]
+    public async Task Post_ConfirmCancelAndAccept_CarryTheSecurityHeaders_AndNoTokenInAnyHeader()
+    {
+        var (confirm, cancel) = await SeedEmailChangeTokens();
+        var (_, link, _) = await _invitations.CreateAsync("alice", "a@example.org", Array.Empty<string>(), null, "en");
+        var invitation = link[(link.IndexOf("t=", StringComparison.Ordinal) + 2)..];
+
+        foreach (var (page, token) in new[] { ("confirm", confirm), ("cancel", cancel), ("accept", invitation) })
+        {
+            _controller.ControllerContext.HttpContext.Response.Headers.Clear();
+            var result = Assert.IsType<PageResult>(await _controller.Open(page, token, null));
+
+            Assert.Equal(200, result.StatusCode);
+            Assert.Equal(token, DataOf(result).GetProperty("token").GetString());
+            Assert.Equal("no-store", _controller.Response.Headers.CacheControl.ToString());
+            Assert.True(_controller.Response.Headers.ContainsKey("Content-Security-Policy"), page);
+            Assert.Equal("no-referrer", _controller.Response.Headers["Referrer-Policy"].ToString());
+            Assert.False(_controller.Response.Headers.ContainsKey("Location"), page);
+            foreach (var header in _controller.Response.Headers)
+            {
+                Assert.DoesNotContain(token, header.Value.ToString(), StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Post_ResetSession_RendersTheResetPage_WithTheSessionInTheJsonData()
+    {
+        var page = Assert.IsType<PageResult>(await _controller.Open("reset", null, "abc_DEF-123"));
+
+        Assert.Contains("reset-form", page.Content, StringComparison.Ordinal);
+        Assert.Equal("abc_DEF-123", DataOf(page).GetProperty("session").GetString());
+    }
+
+    [Fact]
+    public async Task Post_ConfirmCancelAndAccept_RenderTheirPages()
+    {
+        var (confirm, cancel) = await SeedEmailChangeTokens();
+        var (_, link, _) = await _invitations.CreateAsync("alice", "a@example.org", Array.Empty<string>(), null, "en");
+        var invitation = link[(link.IndexOf("t=", StringComparison.Ordinal) + 2)..];
+
+        var confirmPage = Assert.IsType<PageResult>(await _controller.Open("confirm", confirm, null));
+        var cancelPage = Assert.IsType<PageResult>(await _controller.Open("cancel", cancel, null));
+        var acceptPage = Assert.IsType<PageResult>(await _controller.Open("accept", invitation, null));
+
+        Assert.Equal("confirm", DataOf(confirmPage).GetProperty("page").GetString());
+        Assert.Equal(confirm, DataOf(confirmPage).GetProperty("token").GetString());
+        Assert.Equal("cancel", DataOf(cancelPage).GetProperty("page").GetString());
+        Assert.Equal(cancel, DataOf(cancelPage).GetProperty("token").GetString());
+        Assert.Equal("accept", DataOf(acceptPage).GetProperty("page").GetString());
+        Assert.Equal(invitation, DataOf(acceptPage).GetProperty("token").GetString());
+        Assert.Contains("accept-form", acceptPage.Content, StringComparison.Ordinal);
+        Assert.NotNull(await _invitations.PeekAsync(invitation));
+    }
+
+    [Fact]
+    public async Task Post_UnknownUsedExpiredOrForeignToken_GivesTheSameInvalidPageAsGet()
+    {
+        var used = await SeedLink();
+        Assert.IsType<ContentResult>(await _controller.ResetLink(new LinkRequest(used)));
+        var expired = await SeedLink();
+        _time.Advance(TimeSpan.FromMinutes(31));
+        var (confirm, _) = await SeedEmailChangeTokens();
+
+        var expected = Normalize(Assert.IsType<PageResult>(await _controller.Reset("nope", null)));
+        foreach (var t in new[] { used, "nope", expired, confirm, null, string.Empty })
+        {
+            var page = Assert.IsType<PageResult>(await _controller.Open("reset", t, null));
+            Assert.Equal(expected, Normalize(page));
+            Assert.DoesNotContain("reset-form", page.Content, StringComparison.Ordinal);
+            Assert.False(DataOf(page).TryGetProperty("token", out _));
+        }
+
+        var missing = Normalize(Assert.IsType<PageResult>(await _controller.AcceptPage("nope")));
+        Assert.Equal(missing, Normalize(Assert.IsType<PageResult>(await _controller.Open("accept", "nope", null))));
+        Assert.Equal(missing, Normalize(Assert.IsType<PageResult>(await _controller.Open("accept", null, null))));
+        var (_, cancel) = await SeedEmailChangeTokens();
+
+        // The confirmation and cancellation pages decide nothing about the token (the POST they send does), so a foreign or unknown
+        // token gets the same page as a valid one, on POST as on GET: there is no oracle.
+        var wrongPurpose = Assert.IsType<PageResult>(await _controller.Open("confirm", cancel, null));
+        var viaGet = Assert.IsType<PageResult>(await _controller.ConfirmPage(cancel));
+        Assert.Equal(Normalize(viaGet), Normalize(wrongPurpose));
+    }
+
+    [Theory]
+    [InlineData("<script>alert(1)</script>")]
+    [InlineData("has space")]
+    [InlineData("a.b")]
+    public async Task MalformedToken_IsTreatedAsAnInvalidLink_OnGetAndPost(string token)
+    {
+        var long200 = new string('a', 200);
+        foreach (var t in new[] { token, long200 })
+        {
+            var post = Assert.IsType<PageResult>(await _controller.Open("reset", t, null));
+            var get = Assert.IsType<PageResult>(await _controller.Reset(t, null));
+            var session = Assert.IsType<PageResult>(await _controller.Open("reset", null, t));
+            foreach (var page in new[] { post, get, session })
+            {
+                Assert.Contains("no longer works", page.Content, StringComparison.Ordinal);
+                Assert.DoesNotContain("<script>alert", page.Content, StringComparison.Ordinal);
+                Assert.DoesNotContain(t, page.Content, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Post_OverTheRateLimit_GetsTheTooManyPage()
+    {
+        for (var i = 0; i < 30; i++)
+        {
+            Assert.Equal(200, Assert.IsType<PageResult>(await _controller.Open("confirm", "x", null)).StatusCode);
+        }
+
+        var page = Assert.IsType<PageResult>(await _controller.Open("reset", "x", null));
+
+        Assert.Equal(429, page.StatusCode);
+        Assert.Contains("Too many pages were opened from your network", page.Content, StringComparison.Ordinal);
+        Assert.Equal(429, Assert.IsType<PageResult>(await _controller.ConfirmPage("x")).StatusCode);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Post_WhileTheServiceIsClosed_ShowsTheMessagePage(bool guardTripped)
+    {
+        var link = await SeedLink();
+        var (confirm, cancel) = await SeedEmailChangeTokens();
+        Close(guardTripped);
+
+        AssertMessagePage(Assert.IsType<PageResult>(await _controller.Open("reset", link, null)));
+        AssertMessagePage(Assert.IsType<PageResult>(await _controller.Open("reset", null, "session")));
+        AssertMessagePage(Assert.IsType<PageResult>(await _controller.Open("confirm", confirm, null)));
+        AssertMessagePage(Assert.IsType<PageResult>(await _controller.Open("cancel", cancel, null)));
+    }
+
+    [Theory]
+    [InlineData("login")]
+    [InlineData("")]
+    [InlineData("Reset/Link")]
+    public async Task Post_UnknownPage_Is404(string page)
+    {
+        Assert.IsType<NotFoundResult>(await _controller.Open(page, "abc", null));
+    }
+
+    [Fact]
+    public async Task Post_PageNameIsCaseInsensitive()
+    {
+        var page = Assert.IsType<PageResult>(await _controller.Open("Reset", await SeedLink(), null));
+
+        Assert.Contains("reset-form", page.Content, StringComparison.Ordinal);
+    }
+
+    private static JsonElement DataOf(PageResult page)
+    {
+        var match = Regex.Match(page.Content!, "id=\"mailconcierge-data\"[^>]*>(.*?)</script>", RegexOptions.Singleline);
+        Assert.True(match.Success);
+        return JsonDocument.Parse(match.Groups[1].Value).RootElement.Clone();
+    }
+
+    private static string Normalize(PageResult page) => Regex.Replace(page.Content!, "nonce=\"[^\"]*\"|'nonce-[^']*'", string.Empty);
 
     private static void AssertMessagePage(PageResult page)
     {

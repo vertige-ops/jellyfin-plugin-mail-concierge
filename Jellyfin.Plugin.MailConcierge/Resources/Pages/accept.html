@@ -2,8 +2,9 @@
 <form id="accept-form" class="form" data-step="form" novalidate>
 <p>{{s:page.accept.intro}}</p>
 <label for="username">{{s:page.accept.username}}</label>
-<input id="username" name="username" type="text" maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{username}}" required>
-<p id="username-hint" class="hint" hidden></p>
+<input id="username" name="username" type="text" maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{username}}" aria-describedby="username-rules username-hint" required>
+<p id="username-rules" class="hint">{{s:page.accept.usernameRules}}</p>
+<p id="username-hint" class="hint" role="status" aria-live="polite" hidden></p>
 <label for="email">{{s:page.accept.email}}</label>
 <input id="email" name="email" type="email" autocomplete="email" value="{{email}}" required>
 <p class="hint">{{s:page.accept.emailHint}}</p>
@@ -13,7 +14,17 @@
 <label for="confirm">{{s:page.accept.confirm}}</label>
 <input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="8" required>
 <label for="avatar">{{s:page.accept.avatar}}</label>
-<input id="avatar" name="avatar" type="file" accept="image/png,image/jpeg,image/webp">
+<div class="avatar-field">
+<input id="avatar" name="avatar" type="file" accept="image/png,image/jpeg,image/webp" class="visually-hidden">
+<div class="avatar-row">
+<img id="avatar-preview" class="avatar-preview" alt="" width="96" height="96" hidden>
+<div class="avatar-actions">
+<label id="avatar-choose" class="avatar-choose" for="avatar">{{s:page.accept.avatarChoose}}</label>
+<button id="avatar-remove" type="button" class="avatar-remove" hidden>{{s:page.accept.avatarRemove}}</button>
+</div>
+</div>
+</div>
+<p id="avatar-error" class="hint avatar-error" role="alert" hidden>{{s:page.accept.avatarError}}</p>
 <p class="hint">{{s:page.accept.avatarHint}}</p>
 <p id="msg" class="error" role="alert" hidden></p>
 <button id="submit" type="submit" class="button">{{s:page.accept.submit}}</button>

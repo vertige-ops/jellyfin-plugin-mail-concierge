@@ -12,7 +12,7 @@ public class PluginConfigurationTests
     {
         var c = new PluginConfiguration();
 
-        Assert.True(c.Enabled);
+        Assert.False(c.Enabled);
         Assert.False(c.NativeForgotPassword);
         Assert.False(c.EmailLogin);
         Assert.Equal(string.Empty, c.PublicUrl);
@@ -33,9 +33,9 @@ public class PluginConfigurationTests
 
         Assert.Equal(3, c.MaxRecoveryEmailsPerAccountPerHour);
         Assert.Equal(5, c.MaxForgotRequestsPerIpPer15Min);
-        Assert.Equal(10, c.MaxRecoveryEmailsPerHour);
-        Assert.Equal(10, c.MaxInvitationEmailsPerHour);
-        Assert.Equal(10, c.MaxAccountEmailsPerHour);
+        Assert.Equal(10, c.MaxEmailsPerRecipientPerDay);
+        Assert.Equal(200, c.MaxEmailsPerDay);
+        Assert.Equal(string.Empty, c.AdminNotificationAddress);
         Assert.Equal(5, c.MaxPinFailures);
 
         Assert.False(c.AllowAdministrators);
@@ -48,6 +48,21 @@ public class PluginConfigurationTests
 
         Assert.NotNull(c.TemplateOverrides);
         Assert.Empty(c.TemplateOverrides);
+    }
+
+    [Fact]
+    public void EmailLogo_DefaultsToEmbedded()
+        => Assert.Equal(EmailLogoMode.Embedded, new PluginConfiguration().EmailLogo);
+
+    [Fact]
+    public void EmailLogo_IsAbsentFromAnOlderConfigurationFile_AndFallsBackToEmbedded()
+    {
+        const string xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><PluginConfiguration><PublicUrl>https://jf.example.org</PublicUrl></PluginConfiguration>";
+        using var reader = new StringReader(xml);
+
+        var c = (PluginConfiguration)new XmlSerializer(typeof(PluginConfiguration)).Deserialize(reader)!;
+
+        Assert.Equal(EmailLogoMode.Embedded, c.EmailLogo);
     }
 
     [Fact]
@@ -69,6 +84,39 @@ public class PluginConfigurationTests
         c.SmtpHost = "smtp.example.org";
         c.FromAddress = " ";
         Assert.False(c.CanSendEmail());
+    }
+
+    [Fact]
+    public void CanSendEmail_FalseWhenTheHostOrThePortOrTheSenderIsInvalid()
+    {
+        var c = new PluginConfiguration { PublicUrl = "https://jf.example.org", SmtpHost = "smtp.example.org", FromAddress = "jf@example.org" };
+        Assert.True(c.CanSendEmail());
+
+        c.SmtpHost = "smtp.example.org:587";
+        Assert.False(c.CanSendEmail());
+
+        c.SmtpHost = "smtp.example.org";
+        c.SmtpPort = 0;
+        Assert.False(c.CanSendEmail());
+
+        c.SmtpPort = 587;
+        c.FromAddress = "not an address";
+        Assert.False(c.CanSendEmail());
+    }
+
+    [Fact]
+    public void Config_ReadsAStoredEnabledTrue_AndAFileWithoutTheElementIsDisabled()
+    {
+        Assert.True(Read("<Enabled>true</Enabled>").Enabled);
+        Assert.False(Read("<Enabled>false</Enabled>").Enabled);
+        Assert.False(Read(string.Empty).Enabled);
+    }
+
+    private static PluginConfiguration Read(string element)
+    {
+        var xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><PluginConfiguration xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">" + element + "</PluginConfiguration>";
+        using var reader = new StringReader(xml);
+        return Assert.IsType<PluginConfiguration>(new XmlSerializer(typeof(PluginConfiguration)).Deserialize(reader));
     }
 
     [Fact]

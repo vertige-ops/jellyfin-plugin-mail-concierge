@@ -151,11 +151,12 @@ public sealed class InvitationService
     /// <param name="libraryIds">The libraries to grant (library ids).</param>
     /// <param name="days">The validity in days, or null (or zero or less) for the configured default.</param>
     /// <param name="language">The invitation language; anything but fr and en means the default language.</param>
+    /// <param name="liveTv">Whether the new account gets Live TV access.</param>
     /// <returns>The invitation, the link (which is not stored), and what happened to the e-mail, or null when none was to be sent.</returns>
     /// <exception cref="ArgumentException">The user name, the address or a library id is not valid.</exception>
     /// <exception cref="InvalidOperationException">The public URL is not configured, so no usable link can be made.</exception>
     /// <exception cref="ServiceClosedException">The service is closed: nothing is created or sent.</exception>
-    public async Task<(Invitation inv, string link, EnqueueResult? email)> CreateAsync(string proposedUsername, string? email, string[] libraryIds, int? days, string language)
+    public async Task<(Invitation inv, string link, EnqueueResult? email)> CreateAsync(string proposedUsername, string? email, string[] libraryIds, int? days, string language, bool liveTv = false)
     {
         RequireOpen();
         ArgumentNullException.ThrowIfNull(libraryIds);
@@ -184,7 +185,7 @@ public sealed class InvitationService
         RequirePublicUrl(cfg);
         var now = Now();
         var lang = Languages.Normalize(language, cfg.DefaultLanguage);
-        var inv = new Invitation(Guid.NewGuid(), username!, address, libraries, lang, now.AddDays(Math.Clamp(days is > 0 ? days.Value : cfg.InvitationDays, 1, MaxDays)), InvitationState.Pending, now);
+        var inv = new Invitation(Guid.NewGuid(), username!, address, libraries, lang, now.AddDays(Math.Clamp(days is > 0 ? days.Value : cfg.InvitationDays, 1, MaxDays)), InvitationState.Pending, now, liveTv);
         var token = _tokens.NewToken();
         await _store.WriteAsync(d =>
         {
@@ -415,6 +416,10 @@ public sealed class InvitationService
                 return AcceptResult.UsernameTaken;
             }
 
+            // The invitation became Accepted before the account existed (see ClaimAsync): this second write links it to the account.
+            // A later failure restores the original invitation, which has neither field.
+            await RecordAcceptedUserAsync(inv.Id, user.Id).ConfigureAwait(false);
+
             var policy = _users.GetUserDto(user)?.Policy ?? new UserPolicy();
             policy.IsAdministrator = false;
 
@@ -424,6 +429,11 @@ public sealed class InvitationService
             policy.IsDisabled = true;
             policy.LoginAttemptsBeforeLockout = InvitedLoginAttemptsBeforeLockout;
             policy.EnableLiveTvManagement = false;
+            if (inv.LiveTv is bool liveTv)
+            {
+                policy.EnableLiveTvAccess = liveTv;
+            }
+
             policy.EnableAllFolders = false;
             policy.EnabledFolders = inv.LibraryIds.Select(Guid.Parse).ToArray();
             policy.PasswordResetProviderId = MailConciergePasswordResetProvider.Id;
@@ -525,7 +535,7 @@ public sealed class InvitationService
         }
     }
 
-    private static string LinkOf(PluginConfiguration cfg, string token) => cfg.PublicUrl.TrimEnd('/') + "/MailConcierge/Accept?t=" + token;
+    private static string LinkOf(PluginConfiguration cfg, string token) => cfg.PublicUrl.TrimEnd('/') + "/MailConcierge/Accept#t=" + token;
 
     private static bool IsUsable(Invitation inv, DateTime now) => inv.State == InvitationState.Pending && inv.ExpiresAt > now;
 
@@ -582,10 +592,19 @@ public sealed class InvitationService
 
             claimed = new Claim(record, d.Invitations[index]);
             d.Tokens.Remove(record);
-            d.Invitations[index] = d.Invitations[index] with { State = InvitationState.Accepted };
+            d.Invitations[index] = d.Invitations[index] with { State = InvitationState.Accepted, AcceptedAt = now };
         }).ConfigureAwait(false);
         return claimed;
     }
+
+    private Task RecordAcceptedUserAsync(Guid invitationId, Guid userId) => _store.WriteAsync(d =>
+    {
+        var index = d.Invitations.FindIndex(i => i.Id == invitationId);
+        if (index >= 0 && d.Invitations[index].State == InvitationState.Accepted)
+        {
+            d.Invitations[index] = d.Invitations[index] with { UserId = userId };
+        }
+    });
 
     private async Task RestoreAsync(Claim claimed)
     {

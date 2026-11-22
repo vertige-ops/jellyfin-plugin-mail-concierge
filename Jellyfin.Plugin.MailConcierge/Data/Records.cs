@@ -60,6 +60,9 @@ public sealed record UserEmail(Guid UserId, string? Email, string? PendingEmail,
 /// <param name="ExpiresAt">Expiry date (UTC).</param>
 /// <param name="State">Current state.</param>
 /// <param name="CreatedAt">Creation date (UTC).</param>
+/// <param name="LiveTv">Whether the new account gets Live TV access; null for an invitation made before this field existed: Jellyfin's default then applies.</param>
+/// <param name="UserId">The account created when the invitation was accepted; null until then, and for an invitation accepted before this field existed. A crash between the two writes of an acceptance can leave <c>AcceptedAt</c> set with this field null: readers must tolerate it.</param>
+/// <param name="AcceptedAt">When the invitation was accepted (UTC); null until then, and for an invitation accepted before this field existed. See <paramref name="UserId"/> for the case of a crash in the middle of an acceptance.</param>
 public sealed record Invitation(
     Guid Id,
     string ProposedUsername,
@@ -68,7 +71,10 @@ public sealed record Invitation(
     string Language,
     DateTime ExpiresAt,
     InvitationState State,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    bool? LiveTv = null,
+    Guid? UserId = null,
+    DateTime? AcceptedAt = null);
 
 /// <summary>A hashed token or PIN. The clear value is never stored.</summary>
 /// <param name="Hash">The HMAC-SHA256 hash, base64url.</param>

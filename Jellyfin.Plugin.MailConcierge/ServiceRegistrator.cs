@@ -32,15 +32,16 @@ public class ServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton(_ => new TokenService(DataFolder()));
         serviceCollection.TryAddSingleton(TimeProvider.System);
         serviceCollection.AddSingleton<RateLimiter>();
+        serviceCollection.AddSingleton<EmailStats>();
         serviceCollection.AddSingleton<Func<PluginConfiguration>>(_ => Configuration);
         serviceCollection.AddSingleton<Action<PluginConfiguration>>(_ => SaveConfiguration);
         serviceCollection.AddSingleton<IEmailTransport, SmtpEmailTransport>();
         serviceCollection.AddSingleton(sp => new EmailQueue(
             sp.GetRequiredService<Func<PluginConfiguration>>(),
             sp.GetRequiredService<IEmailTransport>(),
-            sp.GetRequiredService<RateLimiter>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<EmailQueue>>(),
-            sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<TimeProvider>(),
+            stats: sp.GetRequiredService<EmailStats>()));
         serviceCollection.AddSingleton<ProxyGuard>();
         serviceCollection.AddSingleton<ServiceGate>();
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<EmailQueue>());

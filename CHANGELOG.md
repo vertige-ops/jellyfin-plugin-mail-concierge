@@ -1,5 +1,89 @@
 # Changelog
 
+## 12.4.1.0
+
+Welcome to release 12.4.1.0 of **Mail Concierge**. This one keeps the tokens of e-mail links out of your logs, lets you choose Live TV for each invitation, simplifies the e-mail limits, and tidies the settings page.
+
+> [!IMPORTANT]
+> **If e-mails stop after the update**: the SMTP server, the port and the sender address are now checked before Mail Concierge sends anything. Open the settings: a yellow banner says what is missing. Enter the server name only (for example `smtp.example.org`, no `https://` and no port) and a valid sender address. An install that never saved its settings now starts turned off: tick **Enable Mail Concierge** on the General tab. A new install starts turned off too, and a banner on the settings page says so.
+
+### Highlights
+
+- Links in e-mails that no log ever sees
+- A "Live TV" checkbox on each invitation
+- SMTP providers filled in for you
+- Two simple daily e-mail limits, with a warning when one is reached
+- A clearer invitation history and a count of e-mails per account
+- Help in an (i) icon next to every field
+
+### Links that no log ever sees
+
+The links in e-mails (invitation, password reset, address confirmation and cancellation) now carry their token after a `#`, which browsers never send to the server: it no longer shows in the Jellyfin log, a reverse proxy log or the `Referer`. A short page reads it and posts it to the server. The reset session of the PIN flow is posted the same way. Links sent by earlier versions keep working, and the page removes their `?t=` from the address bar.
+
+### Live TV, per invitation
+
+A "Live TV" checkbox on each invitation: invited accounts get live TV only when you tick it. It is unticked by default, so invitations created from now on no longer give live TV unless you choose; invitations created before this version keep Jellyfin's default (the history shows a dash for them). The box only appears when your server has Live TV, and a short note under it says what an unticked box means.
+
+### Simpler e-mail limits
+
+Two daily limits replace the three hourly ones: **10 e-mails per recipient per day** and **200 e-mails per day for the whole server**. Invitations, password recovery and address confirmation share them; they are counted over a rolling 24 hours, in memory only, so a restart resets them. The security notices sent to a replaced address and the test e-mail are never counted, and the recipient is known only by a hash of the address.
+
+When a limit stops an e-mail, the Jellyfin log says so and the General tab shows a banner with the date and how many recipients are at their limit. If you give an **address to warn** on the General tab, Mail Concierge also sends it a short translated e-mail, with counts only and never a recipient's address, at most once a day for each limit. The per-account limit on recovery e-mails and the per-address limits stay, but are no longer shown on the settings page.
+
+### A clearer settings page
+
+The explanations under the fields are now in the **(i) icon** next to each field's label: the provider's official instructions in the icon of **Provider**, the hints for the user name and the password in the icons of those fields (they follow the chosen provider), the note about saving before sending a test in the icon of the test address, and so on for every tab. Only short status messages stay visible. The icons open with the mouse, with the keyboard (Escape closes them) and by touch. Links on the page are underlined, in the colour of the text, and turn Jellyfin blue when you point at them; other Jellyfin pages are not affected.
+
+### Upgrade notes
+
+- Install 12.4.1.0 on Jellyfin 12.4 and later 12.x (tested on 12.4 only), then restart Jellyfin.
+- **Existing installs switch the e-mail logo to "Included in the message" when they update**; choose "Loaded from the server" in the e-mail templates tab to keep the previous behaviour.
+- The three hourly limits of earlier versions are no longer used and their values are not carried over: if you had changed them, set the new daily limits.
+- Invitations created before this version keep Jellyfin's default for Live TV; links sent by earlier versions keep working.
+
+### What's changed
+
+#### 🚀 Features
+
+- A "Live TV" checkbox on each invitation, unticked by default, shown only when the server has Live TV.
+- A provider list on the SMTP tab fills in the host, port and security for Gmail, Brevo, SMTP2GO, Mailgun (EU region by default) and Mailjet, with a link to each provider's instructions and a reminder to verify the sender's domain with the provider.
+- An "E-mail logo" setting in the e-mail templates tab: included in the message (the new default: it shows without a click, asks nothing from your server and adds about 30 KB to each HTML e-mail), loaded from your server as in 12.4.0.0, or left out. The test e-mail follows the saved setting.
+- Two daily e-mail limits (per recipient and for the server), with a log line, a banner and an optional e-mail to an address you choose when one is reached.
+- The Accounts tab shows how many e-mails each account received since Jellyfin started, with the date of the last one and the number of failures, and the totals of invitations. The counters live in memory only and are reset when Jellyfin restarts; no address, subject or error text is kept.
+- On the account creation page, the picture field is a translated button with a round preview, and a picture can be removed before sending.
+
+#### 🌟 Enhancements
+
+- The invitation history is a table with a status column (icons for pending, accepted, expired and revoked), the access granted to each invitation (libraries and Live TV) and the date of acceptance. You can filter by status and search, and the table adapts to a phone screen. For invitations accepted from this version on, the name opens that user's page in the dashboard. Erasing a line of the history always asks first.
+- The settings page refuses to enable the plugin until the public URL, the SMTP server and the sender address are complete, and the refusal says which fields to save and on which tab. A new install starts turned off, with a banner telling you to tick **Enable Mail Concierge**; installs that already have a setting keep it.
+- The SMTP server field refuses a web address or a port: enter the server name only.
+- The public URL is suggested from the address published in Jellyfin when the field is empty; it is only saved when you click Save.
+- The explanations under the fields moved into (i) icons, and the links of the settings page follow the Jellyfin look.
+- Readable on Jellyfin's light and dark themes: warnings and errors on the settings page keep the theme's text colour and are marked by a coloured bar or tinted background. On the public pages the main button is darker (white text with enough contrast) and every button and link shows a visible outline when reached with the keyboard. After creating an account the focus moves to the success title, and the rules for a user name are written under the field.
+- The hint in the E-mail templates tab names real placeholders (`{{username}}`, `{{link}}`).
+
+#### 🔒 Security
+
+- The tokens of e-mail links travel in the part of the address after `#`, so they no longer reach the Jellyfin log, a reverse proxy log or the `Referer`.
+- The daily limits keep a recipient only as a hash, never as an address; the warning e-mail to the administrator carries counts only.
+- The logo included in the message uses a fixed identifier and no file name, so mail apps do not list it as an attachment.
+
+#### 🐛 Bug fixes
+
+- The logo included in the message is no longer listed as an attachment by mail apps.
+
+#### 📦 Build and release
+
+- The release workflow accepts a changed description and overview in the manifest, besides the single new release.
+
+### That's all for this one
+
+Questions, ideas and bug reports are welcome in the [issues](https://github.com/vertige-ops/jellyfin-plugin-mail-concierge/issues). The known limits are listed openly in the [security model](https://github.com/vertige-ops/jellyfin-plugin-mail-concierge/blob/main/docs/security-model.md).
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/vertige-ops/jellyfin-plugin-mail-concierge/main/docs/images/new-release-done.jpg" alt="A butler holding a sheet that reads: New release done sir!" width="360">
+</p>
+
 ## 12.4.0.0
 
 Welcome to release 12.4.0.0 of **Mail Concierge**. This one lines the plugin up with Jellyfin 12.4, lets people sign in with their e-mail address, and closes a long list of gaps found in a security review.

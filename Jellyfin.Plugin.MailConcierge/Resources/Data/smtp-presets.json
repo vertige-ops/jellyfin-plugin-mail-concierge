@@ -1,0 +1,47 @@
+[
+  {
+    "id": "gmail",
+    "name": "Gmail",
+    "host": "smtp.gmail.com",
+    "port": 587,
+    "security": "starttls",
+    "docUrl": "https://support.google.com/accounts/answer/185833",
+    "checkedOn": "2026-11-15"
+  },
+  {
+    "id": "brevo",
+    "name": "Brevo",
+    "host": "smtp-relay.brevo.com",
+    "port": 587,
+    "security": "starttls",
+    "docUrl": "https://help.brevo.com/hc/en-us/articles/7924908994450-Send-transactional-emails-using-Brevo-SMTP",
+    "checkedOn": "2026-11-15"
+  },
+  {
+    "id": "smtp2go",
+    "name": "SMTP2GO",
+    "host": "mail.smtp2go.com",
+    "port": 587,
+    "security": "starttls",
+    "docUrl": "https://support.smtp2go.com/hc/en-gb/articles/223087627-SMTP-Settings",
+    "checkedOn": "2026-11-15"
+  },
+  {
+    "id": "mailgun",
+    "name": "Mailgun",
+    "host": "smtp.eu.mailgun.org",
+    "port": 587,
+    "security": "starttls",
+    "docUrl": "https://documentation.mailgun.com/docs/mailgun/user-manual/sending-messages/send-smtp",
+    "checkedOn": "2026-11-15"
+  },
+  {
+    "id": "mailjet",
+    "name": "Mailjet",
+    "host": "in-v3.mailjet.com",
+    "port": 587,
+    "security": "starttls",
+    "docUrl": "https://dev.mailjet.com/docs/smtp-relay/configuration",
+    "checkedOn": "2026-11-15"
+  }
+]

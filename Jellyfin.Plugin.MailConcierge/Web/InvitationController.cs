@@ -5,11 +5,13 @@ using System.Net.Mime;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.MailConcierge.Configuration;
+using Jellyfin.Plugin.MailConcierge.Data;
 using Jellyfin.Plugin.MailConcierge.Email;
 using Jellyfin.Plugin.MailConcierge.Invitations;
 using Jellyfin.Plugin.MailConcierge.Security;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.LiveTv;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -30,6 +32,8 @@ public sealed class InvitationController : ControllerBase
 
     private readonly InvitationService _invitations;
     private readonly ILibraryManager _libraries;
+    private readonly ILiveTvManager _liveTv;
+    private readonly IUserManager _users;
     private readonly Func<PluginConfiguration> _config;
 
     /// <summary>
@@ -37,22 +41,27 @@ public sealed class InvitationController : ControllerBase
     /// </summary>
     /// <param name="invitations">The invitation service.</param>
     /// <param name="libraries">The library manager.</param>
+    /// <param name="liveTv">The Live TV manager.</param>
+    /// <param name="users">The user manager.</param>
     /// <param name="config">Accessor of the current configuration.</param>
-    public InvitationController(InvitationService invitations, ILibraryManager libraries, Func<PluginConfiguration> config)
+    public InvitationController(InvitationService invitations, ILibraryManager libraries, ILiveTvManager liveTv, IUserManager users, Func<PluginConfiguration> config)
     {
         _invitations = invitations;
         _libraries = libraries;
+        _liveTv = liveTv;
+        _users = users;
         _config = config;
     }
 
     /// <summary>
     /// Lists the invitations. Links and token hashes are never returned.
     /// </summary>
-    /// <returns>The invitations, newest first.</returns>
+    /// <returns>The invitations, newest first, with the names of the libraries still known, the Live TV choice, when the invitation was accepted and, once accepted, the id of the account when it still exists.</returns>
     [HttpGet("Invitations")]
     public async Task<ActionResult> List()
     {
         var all = await _invitations.ListAsync().ConfigureAwait(false);
+        var known = KnownLibraries();
         return Json(
             StatusCodes.Status200OK,
             all.Select(i => new
@@ -65,6 +74,10 @@ public sealed class InvitationController : ControllerBase
                 expiresAt = DateTime.SpecifyKind(i.ExpiresAt, DateTimeKind.Utc),
                 createdAt = DateTime.SpecifyKind(i.CreatedAt, DateTimeKind.Utc),
                 state = i.State.ToString(),
+                libraries = (i.LibraryIds ?? Array.Empty<string>()).Select(l => Guid.TryParse(l, out var id) && known.TryGetValue(id, out var name) ? name : null).OfType<string>().ToList(),
+                liveTv = i.LiveTv,
+                acceptedAt = i.AcceptedAt is { } at ? DateTime.SpecifyKind(at, DateTimeKind.Utc) : (DateTime?)null,
+                userId = AcceptedAccount(i)?.ToString("N"),
             }).ToList());
     }
 
@@ -91,7 +104,7 @@ public sealed class InvitationController : ControllerBase
 
         try
         {
-            var (inv, link, email) = await _invitations.CreateAsync(request.ProposedUsername ?? string.Empty, request.Email, libraryIds, request.Days, request.Language ?? string.Empty).ConfigureAwait(false);
+            var (inv, link, email) = await _invitations.CreateAsync(request.ProposedUsername ?? string.Empty, request.Email, libraryIds, request.Days, request.Language ?? string.Empty, request.LiveTv ?? false).ConfigureAwait(false);
             return Json(StatusCodes.Status200OK, new { id = inv.Id, link, emailed = email == EnqueueResult.Queued, emailStatus = EmailStatus(email) });
         }
         catch (ServiceClosedException)
@@ -158,6 +171,21 @@ public sealed class InvitationController : ControllerBase
     public ActionResult Libraries()
         => Json(StatusCodes.Status200OK, KnownLibraries().Select(l => new { id = l.Key.ToString("N"), name = l.Value }).ToList());
 
+    /// <summary>
+    /// Tells whether Live TV is active on this server, so the page can offer the Live TV choice.
+    /// Jellyfin always registers its built-in Live TV service, so a single service is not enough.
+    /// The rule mirrors Jellyfin's own: Live TV is active when another service is registered
+    /// (more than one) or when a tuner host is configured and at least one user can use it.
+    /// </summary>
+    /// <returns><c>{ "available": true }</c> when Live TV is active, <c>{ "available": false }</c> otherwise.</returns>
+    [HttpGet("LiveTv")]
+    public ActionResult LiveTv()
+    {
+        var info = _liveTv.GetLiveTvInfo(HttpContext.RequestAborted);
+        var active = info.Services.Length > 1 || info.EnabledUsers.Length > 0;
+        return Json(StatusCodes.Status200OK, new { available = active });
+    }
+
     private static string EmailStatus(EnqueueResult? email) => email switch
     {
         EnqueueResult.Queued => "queued",
@@ -166,6 +194,16 @@ public sealed class InvitationController : ControllerBase
         EnqueueResult.QueueFull => "queue_full",
         _ => "none",
     };
+
+    private Guid? AcceptedAccount(Invitation invitation)
+    {
+        if (invitation.State != InvitationState.Accepted)
+        {
+            return null;
+        }
+
+        return invitation.UserId is { } id ? _users.GetUserById(id)?.Id : null;
+    }
 
     private Dictionary<Guid, string> KnownLibraries()
     {

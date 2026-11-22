@@ -1,0 +1,9 @@
+Subject: Mail Concierge: a daily e-mail limit was reached
+
+Hello,
+
+{{detail}}
+
+The e-mails beyond the limit were not sent. The people concerned can try again later: the count covers the last 24 hours and frees up as time passes.
+
+You can change the limits in the Mail Concierge settings, General tab. This notice is sent at most once a day for each limit, and it never contains an address.

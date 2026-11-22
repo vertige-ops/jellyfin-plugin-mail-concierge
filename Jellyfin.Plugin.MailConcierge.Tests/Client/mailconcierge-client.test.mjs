@@ -325,9 +325,19 @@ test('forgot password: user name remembered, dialog text replaced once', async (
 });
 
 test('PIN page: user name field, native submit stopped, anonymous Reset/Pin, then reset page', async () => {
+    const posted = [];
     const { d, w, calls, jsdomErrors } = await load('#/forgotpasswordpin', fixture('forgotpasswordpin'), {
         anon: true,
-        before: (win) => win.sessionStorage.setItem('mailconcierge.username', 'bob'),
+        before: (win) => {
+            win.sessionStorage.setItem('mailconcierge.username', 'bob');
+            // jsdom does not navigate: record the form that would be submitted.
+            win.HTMLFormElement.prototype.submit = function () {
+                posted.push({
+                    method: this.method, action: this.getAttribute('action'), parent: this.parentNode && this.parentNode.nodeName,
+                    fields: Object.fromEntries([...this.elements].map((e) => [e.name, e.value]))
+                });
+            };
+        },
         fetch: () => ({ ok: true, json: () => Promise.resolve({ session: 'S1/x' }) })
     });
     const user = d.querySelector('#mailConciergePinUser');
@@ -345,8 +355,13 @@ test('PIN page: user name field, native submit stopped, anonymous Reset/Pin, the
     assert.equal(call.url, 'http://jf.test/jf/MailConcierge/Reset/Pin');
     assert.equal(call.init.credentials, 'omit');
     assert.deepEqual(JSON.parse(call.init.body), { username: 'bob', pin: '12345678' });
-    // jsdom does not implement navigation: the attempt to leave for the reset page is reported here.
-    assert.ok(jsdomErrors.some((m) => m.includes('navigation')));
+    // The session goes to the reset page in a POST body, never in the address.
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].method, 'post');
+    assert.equal(posted[0].action, 'http://jf.test/jf/MailConcierge/Open/reset');
+    assert.deepEqual(posted[0].fields, { s: 'S1/x' });
+    assert.equal(w.location.href.includes('S1'), false);
+    assert.equal(jsdomErrors.some((m) => m.includes('navigation')), false);
 });
 
 test('PIN page: generic error shown inline on failure', async () => {

@@ -34,12 +34,12 @@ public sealed class InvitationServiceTests : IDisposable
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero));
     private readonly PluginConfiguration _config = new()
     {
+        Enabled = true,
         PublicUrl = "https://jf.example/",
         SmtpHost = "smtp.example",
         FromAddress = "jf@example.com",
-        MaxRecoveryEmailsPerHour = 100,
-        MaxInvitationEmailsPerHour = 100,
-        MaxAccountEmailsPerHour = 100,
+        MaxEmailsPerRecipientPerDay = 100,
+        MaxEmailsPerDay = 100,
         ConfirmationHours = 48,
         InvitationDays = 7,
         DefaultLanguage = "en",
@@ -68,7 +68,7 @@ public sealed class InvitationServiceTests : IDisposable
         _store = new MailConciergeStore(_dir);
         _tokens = new TokenService(_dir);
         var limiter = new RateLimiter(_time);
-        _queue = new EmailQueue(() => _config, _transport, limiter, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero });
+        _queue = new EmailQueue(() => _config, _transport, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero });
         _queue.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         var host = new Mock<IServerApplicationHost>();
         host.SetupGet(h => h.FriendlyName).Returns("My Jellyfin");
@@ -98,7 +98,7 @@ public sealed class InvitationServiceTests : IDisposable
     {
         var (inv, link, _) = await _service.CreateAsync("alice", "alice@example.org", new[] { _lib1.ToString("N") }, null, "fr");
 
-        Assert.StartsWith("https://jf.example/MailConcierge/Accept?t=", link, StringComparison.Ordinal);
+        Assert.StartsWith("https://jf.example/MailConcierge/Accept#t=", link, StringComparison.Ordinal);
         Assert.Equal(InvitationState.Pending, inv.State);
         Assert.Equal(_time.GetUtcNow().UtcDateTime.AddDays(7), inv.ExpiresAt);
         var mail = Assert.Single(await _transport.WaitForAsync(1));
@@ -114,7 +114,7 @@ public sealed class InvitationServiceTests : IDisposable
     {
         var (inv, link, _) = await _service.CreateAsync("alice", null, new[] { _lib1.ToString("N") }, 3, "en");
 
-        Assert.Contains("/MailConcierge/Accept?t=", link, StringComparison.Ordinal);
+        Assert.Contains("/MailConcierge/Accept#t=", link, StringComparison.Ordinal);
         Assert.Null(inv.Email);
         Assert.Equal(_time.GetUtcNow().UtcDateTime.AddDays(3), inv.ExpiresAt);
         await _transport.ExpectNoneAsync();
@@ -237,7 +237,7 @@ public sealed class InvitationServiceTests : IDisposable
         var mails = await _transport.WaitForAsync(2);
         Assert.Equal("confirm-email", mails[1].Template);
         Assert.Equal("other@example.org", mails[1].To);
-        Assert.Contains("https://jf.example/MailConcierge/Confirm?t=", mails[1].Text, StringComparison.Ordinal);
+        Assert.Contains("https://jf.example/MailConcierge/Confirm#t=", mails[1].Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -275,6 +275,81 @@ public sealed class InvitationServiceTests : IDisposable
         // The invitation is usable again.
         _users.Setup(u => u.ChangePassword(_created.Id, It.IsAny<string>())).Returns(Task.CompletedTask);
         Assert.Equal(AcceptResult.Ok, await _service.AcceptAsync(token, "alice", "a@example.org", Strong, "en"));
+    }
+
+    [Fact]
+    public async Task Accept_RecordsTheAcceptedAccountAndTime()
+    {
+        var token = TokenOf((await _service.CreateAsync("alice", null, Array.Empty<string>(), null, "en")).link);
+        _time.Advance(TimeSpan.FromHours(3));
+
+        Assert.Equal(AcceptResult.Ok, await _service.AcceptAsync(token, "alice", "a@example.org", Strong, "en"));
+
+        var stored = await _store.ReadAsync(d => d.Invitations.Single());
+        Assert.Equal(InvitationState.Accepted, stored.State);
+        Assert.Equal(_created.Id, stored.UserId);
+        Assert.Equal(_time.GetUtcNow().UtcDateTime, stored.AcceptedAt);
+        Assert.Equal(DateTimeKind.Utc, stored.AcceptedAt!.Value.Kind);
+    }
+
+    [Fact]
+    public async Task Accept_WhenAccountSetupFails_RestoresTheInvitationWithoutUserIdOrAcceptedAt()
+    {
+        var token = TokenOf((await _service.CreateAsync("alice", null, Array.Empty<string>(), null, "en")).link);
+        var original = await _store.ReadAsync(d => d.Invitations.Single());
+        _users.Setup(u => u.ChangePassword(_created.Id, It.IsAny<string>())).ThrowsAsync(new InvalidOperationException("boom"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _service.AcceptAsync(token, "alice", "a@example.org", Strong, "en"));
+
+        var stored = await _store.ReadAsync(d => d.Invitations.Single());
+        Assert.Equal(original, stored);
+        Assert.Equal(InvitationState.Pending, stored.State);
+        Assert.Null(stored.UserId);
+        Assert.Null(stored.AcceptedAt);
+        _users.Verify(u => u.DeleteUserAsync(_created.Id), Times.Once);
+    }
+
+    [Fact]
+    public async Task Accept_WhenTheUserIdWriteFails_DeletesTheAccount_AndRestoresTheOriginalInvitation()
+    {
+        var token = TokenOf((await _service.CreateAsync("alice", null, Array.Empty<string>(), null, "en")).link);
+        var original = await _store.ReadAsync(d => d.Invitations.Single());
+        // A directory in the place of the temporary file makes the next save fail; deleting the account clears it so the restoring write works.
+        var blocker = Path.Combine(_dir, "mailconcierge.json.tmp");
+        _users.Setup(u => u.CreateUserAsync("alice")).Returns(() =>
+        {
+            Directory.CreateDirectory(blocker);
+            return Task.FromResult(_created);
+        });
+        _users.Setup(u => u.DeleteUserAsync(_created.Id)).Callback(() => Directory.Delete(blocker)).Returns(Task.CompletedTask);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => _service.AcceptAsync(token, "alice", "a@example.org", Strong, "en"));
+
+        Assert.Equal(original, await _store.ReadAsync(d => d.Invitations.Single()));
+        _users.Verify(u => u.DeleteUserAsync(_created.Id), Times.Once);
+        _users.Verify(u => u.UpdatePolicyAsync(It.IsAny<Guid>(), It.IsAny<UserPolicy>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Regenerate_AndErase_LeaveTheAcceptanceFieldsOfOtherInvitationsAlone()
+    {
+        var (accepted, _, _) = await _service.CreateAsync("alice", null, Array.Empty<string>(), null, "en");
+        var (other, _, _) = await _service.CreateAsync("bob", null, Array.Empty<string>(), null, "en");
+        var userId = Guid.NewGuid();
+        var at = _time.GetUtcNow().UtcDateTime;
+        await _store.WriteAsync(d =>
+        {
+            var i = d.Invitations.FindIndex(x => x.Id == accepted.Id);
+            d.Invitations[i] = d.Invitations[i] with { State = InvitationState.Accepted, UserId = userId, AcceptedAt = at };
+        });
+
+        await _service.RegenerateAsync(other.Id);
+        await _service.EraseAsync(other.Id);
+
+        var stored = await _store.ReadAsync(d => d.Invitations.Single());
+        Assert.Equal(accepted.Id, stored.Id);
+        Assert.Equal(userId, stored.UserId);
+        Assert.Equal(at, stored.AcceptedAt);
     }
 
     [Fact]
@@ -428,6 +503,78 @@ public sealed class InvitationServiceTests : IDisposable
         Assert.False(_appliedPolicy.EnableLiveTvManagement);
     }
 
+    [Fact]
+    public async Task Accept_LiveTvChecked_GrantsLiveTvAccess()
+    {
+        var token = TokenOf((await _service.CreateAsync("alice", null, Array.Empty<string>(), null, "en", liveTv: true)).link);
+
+        Assert.Equal(AcceptResult.Ok, await _service.AcceptAsync(token, "alice", "a@example.org", Strong, "en"));
+
+        Assert.NotNull(_appliedPolicy);
+        Assert.True(_appliedPolicy.EnableLiveTvAccess);
+        Assert.False(_appliedPolicy.EnableLiveTvManagement);
+    }
+
+    [Fact]
+    public async Task Accept_LiveTvUnchecked_RefusesLiveTvAccess()
+    {
+        var token = TokenOf((await _service.CreateAsync("alice", null, Array.Empty<string>(), null, "en", liveTv: false)).link);
+
+        Assert.Equal(AcceptResult.Ok, await _service.AcceptAsync(token, "alice", "a@example.org", Strong, "en"));
+
+        Assert.NotNull(_appliedPolicy);
+        Assert.False(_appliedPolicy.EnableLiveTvAccess);
+        Assert.False(_appliedPolicy.EnableLiveTvManagement);
+    }
+
+    [Fact]
+    public async Task Create_WithoutLiveTvArgument_StoresFalse_NeverNull()
+    {
+        var (inv, _, _) = await _service.CreateAsync("alice", null, Array.Empty<string>(), null, "en");
+
+        Assert.False(inv.LiveTv);
+        Assert.False((await _store.ReadAsync(d => d.Invitations.Single())).LiveTv);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Accept_LegacyInvitationWithoutLiveTv_KeepsJellyfinsDefault(bool jellyfinDefault)
+    {
+        var (inv, link, _) = await _service.CreateAsync("alice", null, Array.Empty<string>(), null, "en");
+        await _store.WriteAsync(d =>
+        {
+            var i = d.Invitations.FindIndex(x => x.Id == inv.Id);
+            d.Invitations[i] = d.Invitations[i] with { LiveTv = null };
+        });
+        _users.Setup(u => u.GetUserDto(_created, null)).Returns(new UserDto { Policy = new UserPolicy { EnableLiveTvAccess = jellyfinDefault } });
+
+        Assert.Equal(AcceptResult.Ok, await _service.AcceptAsync(TokenOf(link), "alice", "a@example.org", Strong, "en"));
+
+        Assert.NotNull(_appliedPolicy);
+        Assert.Equal(jellyfinDefault, _appliedPolicy.EnableLiveTvAccess);
+        Assert.False(_appliedPolicy.EnableLiveTvManagement);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task Regenerate_KeepsLiveTv(bool? liveTv)
+    {
+        var (inv, _, _) = await _service.CreateAsync("alice", "alice@example.org", Array.Empty<string>(), null, "en", liveTv: liveTv ?? false);
+        // Patching the stored invitation to null simulates an invitation made before 12.4.1.0.
+        await _store.WriteAsync(d =>
+        {
+            var i = d.Invitations.FindIndex(x => x.Id == inv.Id);
+            d.Invitations[i] = d.Invitations[i] with { LiveTv = liveTv };
+        });
+
+        await _service.RegenerateAsync(inv.Id);
+
+        Assert.Equal(liveTv, (await _store.ReadAsync(d => d.Invitations.Single(x => x.Id == inv.Id))).LiveTv);
+    }
+
     [Theory]
     [InlineData("a@b", false)]
     [InlineData("alice@example.org", false)]
@@ -567,7 +714,7 @@ public sealed class InvitationServiceTests : IDisposable
     [Fact]
     public async Task Regenerate_OverBudget_ReturnsLimitReached_AndStillReturnsTheLink()
     {
-        _config.MaxInvitationEmailsPerHour = 1;
+        _config.MaxEmailsPerDay = 1;
         var (inv, oldLink, _) = await _service.CreateAsync("alice", "alice@example.org", Array.Empty<string>(), null, "en");
 
         var (newLink, email) = await _service.RegenerateAsync(inv.Id);

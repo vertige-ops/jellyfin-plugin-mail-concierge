@@ -119,11 +119,12 @@ public sealed class PageRenderer
     /// <summary>
     /// Renders a page.
     /// </summary>
-    /// <param name="page">The page name: reset, confirm, cancel, accept, message or toomany.</param>
+    /// <param name="page">The page name: reset, confirm, cancel, accept, entry, message or toomany.</param>
     /// <param name="language">The language code.</param>
     /// <param name="model">An object whose public properties are available to the template as placeholders.</param>
+    /// <param name="clientData">Optional object whose public properties (null ones left out, names in camelCase) are added to the page JSON data next to the standard ones, never replacing them.</param>
     /// <returns>The result carrying the nonce to put in the security headers.</returns>
-    public PageResult Render(string page, string language, object model)
+    public PageResult Render(string page, string language, object model, object? clientData = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         var lang = Languages.IsSupported(language) ? language : Languages.Fallback;
@@ -144,7 +145,28 @@ public sealed class PageRenderer
 
         var content = Fill(ReadResource(page + ".html") ?? throw new ArgumentException("Unknown page.", nameof(page)), values, strings, null);
         var clientStrings = new Dictionary<string, string>(strings) { ["password.tooShort"] = EmailTemplates.GetString(lang, "password.tooShort") };
-        var json = JsonSerializer.Serialize(new { page, lang, @base = basePath, minPasswordLength = RecoveryService.MinPasswordLength, strings = clientStrings });
+        var data = new Dictionary<string, object?>
+        {
+            ["page"] = page,
+            ["lang"] = lang,
+            ["base"] = basePath,
+            ["minPasswordLength"] = RecoveryService.MinPasswordLength,
+            ["strings"] = clientStrings,
+        };
+        if (clientData is not null)
+        {
+            foreach (var property in clientData.GetType().GetProperties().Where(p => p.GetIndexParameters().Length == 0))
+            {
+                var name = JsonNamingPolicy.CamelCase.ConvertName(property.Name);
+                var value = property.GetValue(clientData);
+                if (value is not null && !data.ContainsKey(name))
+                {
+                    data[name] = value;
+                }
+            }
+        }
+
+        var json = JsonSerializer.Serialize(data);
         var layout = Fill(
             ReadResource("layout.html")!,
             new Dictionary<string, string>

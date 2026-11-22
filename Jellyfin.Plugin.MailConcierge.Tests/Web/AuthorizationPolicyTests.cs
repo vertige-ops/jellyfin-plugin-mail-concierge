@@ -37,6 +37,19 @@ public class AuthorizationPolicyTests
         }
     }
 
+    [Theory]
+    [InlineData(nameof(AdminController.Status), "Status")]
+    [InlineData(nameof(AdminController.GetEmailStats), "EmailStats")]
+    public void AdminController_EmailCounterRoutes_AreGetRoutesUnderTheElevatedController(string name, string template)
+    {
+        var action = Actions(typeof(AdminController)).Single(a => a.Name == name);
+
+        var route = Assert.Single(action.GetCustomAttributes<HttpGetAttribute>());
+        Assert.Equal(template, route.Template);
+        Assert.Empty(action.GetCustomAttributes<AllowAnonymousAttribute>());
+        Assert.True(HasElevation(typeof(AdminController).GetCustomAttributes<AuthorizeAttribute>()));
+    }
+
     [Fact]
     public void AccountController_AdminActions_RequireElevation()
     {

@@ -44,12 +44,12 @@ public sealed class ForgotPasswordFilterTests : IAsyncDisposable
     private readonly FakeTimeProvider _fake = new(new DateTimeOffset(2026, 10, 31, 12, 0, 30, TimeSpan.Zero));
     private readonly PluginConfiguration _config = new()
     {
+        Enabled = true,
         PublicUrl = "https://jf.example/",
         SmtpHost = "smtp.example",
         FromAddress = "jf@example.com",
-        MaxRecoveryEmailsPerHour = 100,
-        MaxInvitationEmailsPerHour = 100,
-        MaxAccountEmailsPerHour = 100,
+        MaxEmailsPerRecipientPerDay = 100,
+        MaxEmailsPerDay = 100,
         MaxForgotRequestsPerIpPer15Min = 100,
     };
 
@@ -73,7 +73,7 @@ public sealed class ForgotPasswordFilterTests : IAsyncDisposable
         _store = new MailConciergeStore(_dir);
         _tokens = new TokenService(_dir);
         _limiter = new RateLimiter(_fake);
-        _queue = new EmailQueue(() => _config, _transport, _limiter, NullLogger<EmailQueue>.Instance, _fake, new[] { TimeSpan.Zero });
+        _queue = new EmailQueue(() => _config, _transport, NullLogger<EmailQueue>.Instance, _fake, new[] { TimeSpan.Zero });
         _queue.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         _store.WriteAsync(d =>
         {

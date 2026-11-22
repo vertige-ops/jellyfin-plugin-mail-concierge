@@ -8,7 +8,12 @@
     <div id="MailConciergeConfigPage" data-role="page" data-title="Mail Concierge" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
         <!-- Inside the page element: Jellyfin keeps only this element of a plugin page, so styles in <head> are dropped. -->
         <style>
-            #MailConciergeConfigPage .ucWarn { color: #ffb74d; }
+            /* Severity is carried by a bar or a border and a tinted background; the text keeps the theme colour, so it reads on Jellyfin's light and dark themes. */
+            #MailConciergeConfigPage .ucWarn { border-left: 4px solid #f59e0b; padding-left: 0.6em; }
+            #MailConciergeConfigPage .ucErr { border-left: 4px solid #e53935; padding-left: 0.6em; }
+            #MailConciergeConfigPage .ucBox { padding: 0.8em 1em; margin: 1em 0; border: 1px solid; border-left-width: 4px; color: inherit; }
+            #MailConciergeConfigPage .ucBoxErr { border-color: #e53935; background: rgba(229,57,53,0.15); }
+            #MailConciergeConfigPage .ucBoxWarn { border-color: #f59e0b; background: rgba(245,158,11,0.18); }
             #MailConciergeConfigPage .ucHelp { display: inline-block; position: relative; margin-left: 0.5em; width: 1.3em; height: 1.3em; line-height: 1.3em; text-align: center; border: 1px solid currentColor; border-radius: 50%; font-size: 0.8em; font-style: normal; font-weight: bold; cursor: help; opacity: 0.8; }
             /* The help icon sits right after the label text; a checkbox label only spans its box and text, so the icon is outside its click area. */
             #MailConciergeConfigPage .ucHelpRow { display: flex; align-items: center; margin-bottom: 0.25em; }
@@ -17,17 +22,60 @@
             #MailConciergeConfigPage .ucHelpField { flex: none; z-index: 2; }
             #MailConciergeConfigPage .ucHelp::before { content: "i"; }
             #MailConciergeConfigPage .ucHelp:hover, #MailConciergeConfigPage .ucHelp:focus { opacity: 1; outline: 2px solid #00a4dc; outline-offset: 2px; }
-            #MailConciergeConfigPage .ucHelp::after { content: attr(data-tip); display: none; position: absolute; z-index: 10; left: 0; top: 1.9em; width: 18em; max-width: 70vw; padding: 0.6em 0.8em; background: #202020; color: #fff; border: 1px solid #00a4dc; border-radius: 4px; font-size: 1.15em; font-weight: normal; line-height: 1.4; text-align: left; white-space: normal; }
-            #MailConciergeConfigPage .ucHelp:hover::after, #MailConciergeConfigPage .ucHelp:focus::after { display: block; }
+            #MailConciergeConfigPage .ucHelp[hidden] { display: none; }
+            /* The help is a real element, not generated text, so that it can hold a link. It opens on hover, on focus, and while the focus is on its link. */
+            #MailConciergeConfigPage .ucHelp .ucTip { display: none; position: absolute; z-index: 10; left: 0; top: 100%; padding-top: 0.5em; text-align: left; font-weight: normal; cursor: auto; }
+            #MailConciergeConfigPage .ucHelp:hover > .ucTip, #MailConciergeConfigPage .ucHelp:focus > .ucTip, #MailConciergeConfigPage .ucHelp:focus-within > .ucTip { display: block; }
+            #MailConciergeConfigPage .ucHelp:focus-within { opacity: 1; }
+            #MailConciergeConfigPage .ucTipBox { display: block; box-sizing: border-box; width: 18em; max-width: 70vw; padding: 0.6em 0.8em; background: #202020; color: #fff; border: 1px solid #00a4dc; border-radius: 4px; font-size: 1.15em; line-height: 1.4; white-space: normal; }
+            #MailConciergeConfigPage .ucTipPara { display: block; }
+            #MailConciergeConfigPage .ucTipPara + .ucTipPara { margin-top: 0.5em; }
+            /* Links of this page: the colour of the text, underlined; Jellyfin blue when pointed at or focused. The help bubble is dark in every theme, so its links stay light. */
+            #MailConciergeConfigPage a { color: inherit; text-decoration: underline; }
+            #MailConciergeConfigPage a:hover, #MailConciergeConfigPage a:focus { color: #00a4dc; }
+            #MailConciergeConfigPage .ucTipBox a { color: #fff; }
+            #MailConciergeConfigPage .ucTipBox a:hover, #MailConciergeConfigPage .ucTipBox a:focus { color: #00a4dc; }
             /* An emby-button has its own display rule, which would otherwise win over the hidden attribute. */
             #ucClearSmtpPassword[hidden] { display: none; }
+            /* Invitation history: a table above 720 px, one card per invitation below. The text keeps the theme colour. */
+            #MailConciergeConfigPage .ucInvTools { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6em 1em; margin: 0.8em 0; }
+            #MailConciergeConfigPage #ucInvFilters { display: flex; flex-wrap: wrap; gap: 0.4em; }
+            #MailConciergeConfigPage .ucInvFilter { padding: 0.3em 0.9em; border: 1px solid rgba(128,128,128,0.4); border-radius: 999px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+            #MailConciergeConfigPage .ucInvFilter[aria-pressed="true"] { border-color: #00a4dc; background: rgba(0,164,220,0.2); }
+            #MailConciergeConfigPage #ucInvSearch { box-sizing: border-box; flex: 1 1 14em; max-width: 24em; padding: 0.4em 0.7em; border: 1px solid rgba(128,128,128,0.4); border-radius: 4px; background: transparent; color: inherit; font: inherit; }
+            #MailConciergeConfigPage .ucInvWide { display: block; overflow-x: auto; }
+            #MailConciergeConfigPage .ucInvNarrow { display: none; }
+            #MailConciergeConfigPage #ucInvTable { width: 100%; border-collapse: collapse; }
+            #MailConciergeConfigPage #ucInvTable th, #MailConciergeConfigPage #ucInvTable td { padding: 0.6em 0.8em; text-align: left; vertical-align: top; border-bottom: 1px solid rgba(128,128,128,0.4); }
+            #MailConciergeConfigPage #ucInvTable th { font-weight: normal; opacity: 0.7; }
+            #MailConciergeConfigPage .ucInvCard { margin: 0.6em 0; padding: 0.8em 1em; border: 1px solid rgba(128,128,128,0.4); border-radius: 8px; }
+            #MailConciergeConfigPage .ucInvCard > * + * { margin-top: 0.5em; }
+            #MailConciergeConfigPage .ucInvName { font-weight: bold; overflow-wrap: anywhere; }
+            #MailConciergeConfigPage .ucInvSub { opacity: 0.7; font-size: 0.9em; overflow-wrap: anywhere; }
+            #MailConciergeConfigPage .ucInvStatus { display: inline-flex; align-items: center; gap: 0.35em; padding: 0.15em 0.7em 0.15em 0.5em; border: 1px solid currentColor; border-radius: 999px; font-size: 0.9em; white-space: nowrap; }
+            #MailConciergeConfigPage .ucInvStatus svg { width: 1.1em; height: 1.1em; flex: none; }
+            #MailConciergeConfigPage .ucInvAccess { display: flex; flex-wrap: wrap; gap: 0.3em; }
+            #MailConciergeConfigPage .ucInvPill { padding: 0.1em 0.6em; border: 1px solid rgba(128,128,128,0.4); border-radius: 999px; font-size: 0.9em; overflow-wrap: anywhere; max-width: 100%; }
+            #MailConciergeConfigPage .ucInvPillTv { border-color: currentColor; }
+            #MailConciergeConfigPage .ucInvNone { opacity: 0.7; }
+            /* E-mails of each account (Accounts tab): one line per item, wrapping on a phone. */
+            #MailConciergeConfigPage .ucStatList { list-style: none; margin: 0.4em 0; padding: 0; }
+            #MailConciergeConfigPage .ucStatList li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2em 1em; padding: 0.5em 0; border-bottom: 1px solid rgba(128,128,128,0.4); }
+            #MailConciergeConfigPage .ucStatName { font-weight: bold; overflow-wrap: anywhere; }
+            #MailConciergeConfigPage .ucStatFailed { font-weight: bold; }
+            #MailConciergeConfigPage .ucInvActions { display: flex; flex-wrap: wrap; align-items: center; }
+            @media (max-width: 720px) {
+                #MailConciergeConfigPage .ucInvWide { display: none; }
+                #MailConciergeConfigPage .ucInvNarrow { display: block; }
+            }
         </style>
         <div data-role="content">
             <div class="content-primary">
                 <h2 data-t="title"></h2>
 
-                <div id="ucBanner" role="alert" hidden style="padding:0.8em 1em;margin:1em 0;border:1px solid #ff8a80;color:#ff8a80"></div>
-                <div id="ucMailBanner" role="status" hidden style="padding:0.8em 1em;margin:1em 0;border:1px solid #ffd180;color:#ffd180"></div>
+                <div id="ucBanner" class="ucBox ucBoxErr" role="alert" hidden></div>
+                <div id="ucDisabledBanner" class="ucBox ucBoxWarn" role="status" hidden></div>
+                <div id="ucMailBanner" class="ucBox ucBoxWarn" role="status" hidden></div>
 
                 <div class="ucTabBar" role="tablist" style="display:flex;flex-wrap:wrap;gap:0.4em;margin:1em 0">
                     <button is="emby-button" type="button" class="raised emby-button ucTabBtn" role="tab" id="ucTabBtn-general" data-tab="general" aria-controls="ucTab-general"><span data-t="tabGeneral"></span></button>
@@ -40,14 +88,15 @@
 
                 <div class="ucTab" id="ucTab-general" role="tabpanel" aria-labelledby="ucTabBtn-general" hidden>
                     <form data-tab-form="general">
+                    <div id="ucQuotaBanner" class="ucBox ucBoxWarn" role="status" hidden></div>
                     <h3 data-t="secGeneral"></h3>
                     <div class="checkboxContainer checkboxContainer-withDescription">
-                        <label class="emby-checkbox-label"><input data-f="enabled" type="checkbox" is="emby-checkbox" /><span data-t="enabled"></span></label>
+                        <div class="ucHelpRow"><label class="emby-checkbox-label"><input data-f="enabled" type="checkbox" is="emby-checkbox" /><span data-t="enabled"></span></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="enabledHint"></span></div>
                     </div>
                     <div class="inputContainer">
-                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="publicUrl"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.publicUrl"></span></div>
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="publicUrl"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.publicUrl publicUrlHint"></span></div>
                         <input data-f="publicUrl" type="url" is="emby-input" autocomplete="off" />
-                        <div class="fieldDescription" data-t="publicUrlHint"></div>
+                        <div id="ucPublicUrlSuggested" class="fieldDescription" role="status" data-t="publicUrlSuggested" hidden></div>
                         <div id="ucWarnPublicUrl" class="fieldDescription ucWarn" role="status" data-t="warnHttpPublicUrl" hidden>This URL starts with http://: the links in e-mails will travel unencrypted.</div>
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
@@ -57,12 +106,10 @@
                         <div id="ucEmailLoginSharedAccounts" class="fieldDescription checkboxFieldDescription" role="status" hidden></div>
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
-                        <div class="ucHelpRow"><label class="emby-checkbox-label"><input data-f="allowAdministrators" type="checkbox" is="emby-checkbox" /><span data-t="allowAdmins"></span></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.allowAdministrators"></span></div>
-                        <div class="fieldDescription checkboxFieldDescription" data-t="allowAdminsHint"></div>
+                        <div class="ucHelpRow"><label class="emby-checkbox-label"><input data-f="allowAdministrators" type="checkbox" is="emby-checkbox" /><span data-t="allowAdmins"></span></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.allowAdministrators allowAdminsHint"></span></div>
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
-                        <label class="emby-checkbox-label"><input data-f="nativeForgotPassword" type="checkbox" is="emby-checkbox" /><span data-t="native"></span></label>
-                        <div class="fieldDescription checkboxFieldDescription" data-t="nativeHint"></div>
+                        <div class="ucHelpRow"><label class="emby-checkbox-label"><input data-f="nativeForgotPassword" type="checkbox" is="emby-checkbox" /><span data-t="native"></span></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="nativeHint"></span></div>
                     </div>
                     <div class="selectContainer">
                         <div class="ucHelpRow"><label class="selectLabel" data-t="sessions"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.sessionsOnReset"></span></div>
@@ -97,20 +144,16 @@
 
                     <h3 data-t="secLimits" style="margin-top:2em"></h3>
                     <div class="inputContainer">
-                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxRecoveryHour"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxRecoveryHour"></span></div>
-                        <input data-f="maxRecoveryEmailsPerHour" type="number" is="emby-input" min="1" />
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxEmailsPerRecipient"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxEmailsPerRecipient"></span></div>
+                        <input data-f="maxEmailsPerRecipientPerDay" type="number" is="emby-input" min="1" max="1000" />
                     </div>
                     <div class="inputContainer">
-                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxInvitationHour"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxInvitationHour"></span></div>
-                        <input data-f="maxInvitationEmailsPerHour" type="number" is="emby-input" min="1" />
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxEmailsPerDay"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxEmailsPerDay"></span></div>
+                        <input data-f="maxEmailsPerDay" type="number" is="emby-input" min="1" max="10000" />
                     </div>
                     <div class="inputContainer">
-                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxAccountHour"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxAccountHour"></span></div>
-                        <input data-f="maxAccountEmailsPerHour" type="number" is="emby-input" min="1" />
-                    </div>
-                    <div class="inputContainer">
-                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxAccount"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxAccount"></span></div>
-                        <input data-f="maxRecoveryEmailsPerAccountPerHour" type="number" is="emby-input" min="1" />
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="adminNotificationAddress"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.adminNotificationAddress"></span></div>
+                        <input data-f="adminNotificationAddress" type="email" is="emby-input" autocomplete="off" />
                     </div>
                     <div class="inputContainer">
                         <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="maxIp"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.maxIp"></span></div>
@@ -121,7 +164,13 @@
                         <input data-f="maxPinFailures" type="number" is="emby-input" min="1" />
                     </div>
 
-                    <p id="ucError-general" style="color:#ff8a80" role="alert" hidden></p>
+                    <div id="ucQuota" hidden>
+                        <h3 data-t="quotaTitle" style="margin-top:2em"></h3>
+                        <p id="ucQuotaLine" class="fieldDescription"></p>
+                        <p id="ucQuotaBlocked" class="fieldDescription" hidden></p>
+                    </div>
+
+                    <p id="ucError-general" class="ucErr" role="alert" hidden></p>
                     <p id="ucSaved-general" role="status" hidden></p>
                     <div>
                         <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span data-t="save"></span></button>
@@ -132,6 +181,12 @@
                 <div class="ucTab" id="ucTab-smtp" role="tabpanel" aria-labelledby="ucTabBtn-smtp" hidden>
                     <form data-tab-form="smtp">
                     <h3 data-t="secSmtp"></h3>
+                    <div class="selectContainer">
+                        <div class="ucHelpRow"><label class="selectLabel" for="ucSmtpProvider" data-t="smtpProvider"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.smtpProvider" data-help-dyn="provider"></span></div>
+                        <select is="emby-select" id="ucSmtpProvider" class="emby-select-withcolor emby-select">
+                            <option value="" data-t="smtpProviderCustom">Custom</option>
+                        </select>
+                    </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" data-t="smtpHost"></label>
                         <input data-f="smtpHost" type="text" is="emby-input" autocomplete="off" />
@@ -150,14 +205,14 @@
                         <div id="ucWarnSmtp" class="fieldDescription ucWarn" role="status" data-t="warnSmtpNone" hidden>Security “None”: e-mails and the SMTP password travel unencrypted.</div>
                     </div>
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" data-t="smtpUser"></label>
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="smtpUser"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help-dyn="user" hidden></span></div>
                         <input data-f="smtpUsername" type="text" is="emby-input" autocomplete="off" />
                     </div>
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" data-t="smtpPassword"></label>
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="smtpPassword"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="secretHint" data-help-dyn="password"></span></div>
                         <input data-f="smtpPassword" data-secret="smtpPasswordSet" type="password" is="emby-input" autocomplete="new-password" />
-                        <div class="fieldDescription" data-t="secretHint"></div>
                         <button is="emby-button" type="button" class="raised emby-button" id="ucClearSmtpPassword" hidden><span data-t="smtpPasswordClear"></span></button>
+                        <div id="ucSmtpRetypePassword" class="fieldDescription ucWarn" role="status" hidden></div>
                     </div>
                     <div class="inputContainer">
                         <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="fromAddress"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.fromAddress"></span></div>
@@ -168,14 +223,13 @@
                         <input data-f="fromName" type="text" is="emby-input" autocomplete="off" />
                     </div>
                     <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" data-t="testTo"></label>
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="testTo"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="testHint"></span></div>
                         <input id="ucTestTo" type="email" is="emby-input" autocomplete="off" />
-                        <div class="fieldDescription" data-t="testHint"></div>
                     </div>
                     <button is="emby-button" type="button" class="raised emby-button" id="ucTest"><span data-t="testSend"></span></button>
                     <p id="ucTestResult" hidden></p>
 
-                    <p id="ucError-smtp" style="color:#ff8a80" role="alert" hidden></p>
+                    <p id="ucError-smtp" class="ucErr" role="alert" hidden></p>
                     <p id="ucSaved-smtp" role="status" hidden></p>
                     <div>
                         <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span data-t="save"></span></button>
@@ -185,18 +239,24 @@
 
                 <div class="ucTab" id="ucTab-templates" role="tabpanel" aria-labelledby="ucTabBtn-templates" hidden>
                     <form data-tab-form="templates">
-                    <h3><span data-t="secTemplates"></span><span class="ucHelp" tabindex="0" role="img" aria-label="" data-help="help.templates"></span></h3>
+                    <h3><span data-t="secTemplates"></span><span class="ucHelp" tabindex="0" role="img" aria-label="" data-help="help.templates templatesHint"></span></h3>
                     <div class="selectContainer">
-                        <div class="ucHelpRow"><label class="selectLabel" data-t="defaultLanguage"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.defaultLanguage"></span></div>
+                        <div class="ucHelpRow"><label class="selectLabel" data-t="defaultLanguage"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.defaultLanguage defaultLanguageHint"></span></div>
                         <select is="emby-select" data-f="defaultLanguage" class="emby-select-withcolor emby-select">
                         </select>
-                        <div class="fieldDescription" data-t="defaultLanguageHint"></div>
                     </div>
-                    <p class="fieldDescription" data-t="templatesHint"></p>
+                    <div class="selectContainer">
+                        <div class="ucHelpRow"><label class="selectLabel" data-t="emailLogo"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.emailLogo" data-help-dyn="logo"></span></div>
+                        <select is="emby-select" data-f="emailLogo" class="emby-select-withcolor emby-select">
+                            <option value="Embedded" data-t="logoEmbedded"></option>
+                            <option value="Hosted" data-t="logoHosted"></option>
+                            <option value="None" data-t="logoNone"></option>
+                        </select>
+                    </div>
                     <p class="fieldDescription" id="ucTemplatesLang"></p>
                     <div id="ucTemplates"></div>
 
-                    <p id="ucError-templates" style="color:#ff8a80" role="alert" hidden></p>
+                    <p id="ucError-templates" class="ucErr" role="alert" hidden></p>
                     <p id="ucSaved-templates" role="status" hidden></p>
                     <div>
                         <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span data-t="save"></span></button>
@@ -216,19 +276,17 @@
                         <div id="ucWarnSeerr" class="fieldDescription ucWarn" role="status" data-t="warnHttpSeerr" hidden>This URL starts with http://: the Seerr API key will travel unencrypted.</div>
                     </div>
                     <div class="inputContainer">
-                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="seerrKey"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.seerrApiKey"></span></div>
+                        <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" data-t="seerrKey"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="help.seerrApiKey secretHint"></span></div>
                         <input data-f="seerrApiKey" data-secret="seerrApiKeySet" type="password" is="emby-input" autocomplete="new-password" />
-                        <div class="fieldDescription" data-t="secretHint"></div>
                     </div>
 
-                    <p id="ucError-seerr" style="color:#ff8a80" role="alert" hidden></p>
+                    <p id="ucError-seerr" class="ucErr" role="alert" hidden></p>
                     <p id="ucSaved-seerr" role="status" hidden></p>
                     <div>
                         <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span data-t="save"></span></button>
                     </div>
                     </form>
-                <h3 data-t="secSeerrTools"></h3>
-                <p class="fieldDescription" data-t="seerrToolsHint"></p>
+                <h3><span data-t="secSeerrTools"></span><span class="ucHelp" tabindex="0" role="img" aria-label="" data-help="seerrToolsHint"></span></h3>
                 <button is="emby-button" type="button" class="raised emby-button" id="ucSync"><span data-t="syncNow"></span></button>
                 <button is="emby-button" type="button" class="raised emby-button" id="ucPreview"><span data-t="preview"></span></button>
                 <p id="ucSeerrResult" hidden></p>
@@ -244,10 +302,16 @@
                 </div>
 
                 <div class="ucTab" id="ucTab-accounts" role="tabpanel" aria-labelledby="ucTabBtn-accounts" hidden>
-                <h3><span data-t="secAssign"></span><span class="ucHelp" tabindex="0" role="img" aria-label="" data-help="help.assignProvider"></span></h3>
-                <p class="fieldDescription" data-t="assignHint"></p>
+                <h3><span data-t="secAssign"></span><span class="ucHelp" tabindex="0" role="img" aria-label="" data-help="help.assignProvider assignHint"></span></h3>
                 <button is="emby-button" type="button" class="raised emby-button" id="ucAssign"><span data-t="assign"></span></button>
                 <p id="ucAssignResult" hidden></p>
+
+                <h3 data-t="statsTitle" style="margin-top:2em"></h3>
+                <p id="ucStatsSince" class="fieldDescription" hidden></p>
+                <p id="ucStatsInvitations" class="fieldDescription" hidden></p>
+                <ul id="ucStatsList" class="ucStatList" hidden></ul>
+                <p id="ucStatsNone" class="fieldDescription" role="status" data-t="statsNone" hidden></p>
+                <p id="ucStatsUnavailable" class="fieldDescription ucWarn" role="status" data-t="statsUnavailable" hidden></p>
                 </div>
 
                 <div class="ucTab" id="ucTab-invitations" role="tabpanel" aria-labelledby="ucTabBtn-invitations" hidden>
@@ -258,9 +322,8 @@
                             <input id="ucInvUsername" type="text" is="emby-input" autocomplete="off" required />
                         </div>
                         <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="ucInvEmail" data-t="inv.email"></label>
+                            <div class="ucHelpRow"><label class="inputLabel inputLabelUnfocused" for="ucInvEmail" data-t="inv.email"></label><span class="ucHelp ucHelpField" tabindex="0" role="img" aria-label="" data-help="inv.emailHint"></span></div>
                             <input id="ucInvEmail" type="email" is="emby-input" autocomplete="off" />
-                            <div class="fieldDescription" data-t="inv.emailHint"></div>
                         </div>
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="ucInvDays" data-t="inv.days"></label>
@@ -278,8 +341,15 @@
                                 <span data-t="inv.selectAll"></span>
                             </label>
                             <div id="ucInvLibraries"></div>
+                            <div id="ucInvLiveTvRow" class="ucHelpRow" style="display:none;margin:0.4em 0 0;padding-top:0.4em;border-top:1px solid rgba(128,128,128,0.25)">
+                                <label>
+                                    <input id="ucInvLiveTv" type="checkbox" style="margin-right:0.6em" />
+                                    <span data-t="inv.liveTv"></span>
+                                </label>
+                                <span class="ucHelp ucHelpField" id="ucInvLiveTvHint" tabindex="0" role="img" aria-label="" data-help="inv.liveTvHint"></span>
+                            </div>
                         </div>
-                        <p id="ucInvError" style="color:#ff8a80" role="alert" hidden></p>
+                        <p id="ucInvError" class="ucErr" role="alert" hidden></p>
                         <div>
                             <button is="emby-button" type="submit" class="raised button-submit block emby-button" id="ucInvSubmit">
                                 <span></span>
@@ -297,9 +367,30 @@
                         </button>
                     </div>
 
-                    <h3 data-t="inv.list" style="margin-top:2em"></h3>
+                    <h3 style="margin-top:2em"><span data-t="inv.list"></span><span class="ucHelp" tabindex="0" role="img" aria-label="" data-help="inv.historyHint"></span></h3>
                     <p id="ucInvEmpty" data-t="inv.empty" hidden></p>
-                    <div id="ucInvList"></div>
+                    <div id="ucInvHistory" hidden>
+                        <div class="ucInvTools">
+                            <div id="ucInvFilters" role="group"></div>
+                            <input id="ucInvSearch" type="search" autocomplete="off" />
+                        </div>
+                        <p id="ucInvNoMatch" role="status" hidden></p>
+                        <div class="ucInvWide">
+                            <table id="ucInvTable">
+                                <thead>
+                                    <tr>
+                                        <th scope="col" data-t="inv.col.user"></th>
+                                        <th scope="col" data-t="inv.col.status"></th>
+                                        <th scope="col" data-t="inv.col.access"></th>
+                                        <th scope="col" data-t="inv.col.date"></th>
+                                        <th scope="col" data-t="inv.col.actions"></th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                        <div id="ucInvCards" class="ucInvNarrow"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -317,13 +408,48 @@
                 var FALLBACK = {
                     title: 'Mail Concierge',
                     save: 'Save',
+                    smtpProvider: 'Provider',
+                    smtpProviderCustom: 'Custom',
+                    smtpPresetDoc: 'Official instructions',
+                    smtpDomainNote: 'Check the sender\'s domain with this provider (SPF, DKIM), otherwise messages may end up in spam.',
+                    smtpRetypePassword: 'Type the password again for this provider.',
+                    publicUrlSuggested: 'Taken from the address published in Jellyfin: check it, then save.',
                     saved: 'Settings saved.',
+                    quotaTitle: 'E-mails of the last 24 hours',
+                    quotaLine: '{0} of {1} e-mails counted. One recipient can receive up to {2}.',
+                    quotaBlocked: '{0} recipient(s) reached their limit.',
+                    quotaReached: 'A daily e-mail limit was reached on {0}: some e-mails were not sent.',
+                    statsTitle: 'E-mails sent per account',
+                    statsSince: 'Counted since Jellyfin started on {0}',
+                    statsInvitations: 'Invitations: {0} sent, {1} failed',
+                    statsReceived: '{0} e-mail(s) sent, the last on {1}',
+                    statsFailed: '{0} failed',
+                    statsNone: 'No e-mail sent since the start',
+                    statsUnavailable: 'The e-mail counters are unavailable.',
                     errGeneric: 'Something went wrong.',
                     'inv.title': 'Invitations',
                     'inv.send': 'Send',
                     'inv.copyLink': 'Copy link',
                     'inv.errGeneric': 'Something went wrong.',
-                    'inv.selectAll': 'Select all'
+                    'inv.selectAll': 'Select all',
+                    'inv.liveTv': 'Live TV',
+                    'inv.confirmErase': 'Erase this line of the history? This cannot be undone.',
+                    disabledBanner: 'Mail Concierge is turned off: tick "Enable Mail Concierge" on the General tab, then save. Until then invitations and e-mail recovery do not work.',
+                    'inv.col.user': 'User',
+                    'inv.col.status': 'Status',
+                    'inv.col.access': 'Access',
+                    'inv.col.date': 'Date',
+                    'inv.col.actions': 'Actions',
+                    'inv.filter.all': 'All',
+                    'inv.search': 'Search a name or address',
+                    'inv.noAccess': 'None',
+                    'inv.noEmail': 'Link to copy, no address',
+                    'inv.date.accepted': 'Accepted on {0}',
+                    'inv.date.pending': 'Expires on {0}',
+                    'inv.date.expired': 'Expired on {0}',
+                    'inv.date.revoked': 'Revoked',
+                    'inv.openProfile': 'Open the profile of {0}',
+                    'inv.noMatch': 'No invitation matches.'
                 };
 
                 // Reason codes of the proxy guard, resolved here so the banner is localized.
@@ -333,6 +459,15 @@
                 var s = FALLBACK;
                 var defaults = {};
                 var loadedOverrides = {};
+                // SMTP presets served by the server (empty when they could not be loaded: the list then offers "Custom" only).
+                var presets = [];
+                // The saved SMTP host and whether a password is stored (what the server compares a change against).
+                var storedSmtp = { host: '', passwordSet: false };
+                var suggestedUrl = '';
+                // Providers that are a mailbox, not a sending domain: no SPF/DKIM reminder.
+                var NO_DOMAIN_NOTE = { gmail: true };
+                // Preset security (starttls, ssl) to the value of the saved settings.
+                var PRESET_SECURITY = { starttls: 'StartTls', ssl: 'SslOnConnect' };
                 // Language of the page (and default language of an invitation).
                 var invLang = 'en';
 
@@ -393,14 +528,71 @@
                     applyHelp();
                 }
 
-                // The (i) icons: the text is accessible name and the CSS tooltip (no native title: it would show a second bubble) (hover and focus).
+                // The (i) icons. Their content is a list of paragraphs, from the string keys of data-help (separated by spaces) and, for the
+                // few that depend on the page (provider, user name, password, logo), from helpDynamic(). A paragraph is text, or text with a link.
+                // The bubble is built with createElement/textContent only. The text is also the accessible name of the icon; an icon with nothing to say is hidden.
+                function helpParts(el) {
+                    var parts = [];
+                    (el.getAttribute('data-help') || '').split(/\s+/).forEach(function (key) {
+                        if (key && typeof s[key] === 'string' && s[key]) { parts.push({ text: s[key] }); }
+                    });
+                    var dynamic = el.getAttribute('data-help-dyn');
+                    return dynamic ? parts.concat(helpDynamic(dynamic)) : parts;
+                }
+
+                // The provider's hints, for the SMTP fields; the logo hint of the chosen mode.
+                function helpDynamic(kind) {
+                    var preset = presetById($('ucSmtpProvider').value);
+                    var text = function (key) { return typeof s[key] === 'string' && s[key] ? { text: s[key] } : null; };
+                    var parts = [];
+                    if (kind === 'provider' && preset) {
+                        parts.push(text('smtpPreset.' + preset.id + '.note'));
+                        parts.push(NO_DOMAIN_NOTE[preset.id] ? null : text('smtpDomainNote'));
+                        if (/^https:\/\/[^\s]/i.test(preset.docUrl)) { parts.push({ text: s.smtpPresetDoc || preset.name, href: preset.docUrl }); }
+                    } else if (kind === 'user' && preset) {
+                        parts.push(text('smtpPreset.' + preset.id + '.user'));
+                    } else if (kind === 'password' && preset) {
+                        parts.push(text('smtpPreset.' + preset.id + '.password'));
+                    } else if (kind === 'logo') {
+                        parts.push(text('logo' + fieldOf('emailLogo').value + 'Hint'));
+                    }
+                    return parts.filter(Boolean);
+                }
+
                 function applyHelp() {
-                    Array.prototype.forEach.call(page.querySelectorAll('[data-help]'), function (el) {
-                        var text = s[el.getAttribute('data-help')];
-                        if (typeof text === 'string') {
-                            el.setAttribute('aria-label', text);
-                            el.setAttribute('data-tip', text);
-                        }
+                    Array.prototype.forEach.call(page.querySelectorAll('[data-help], [data-help-dyn]'), function (el) {
+                        var parts = helpParts(el);
+                        var signature = JSON.stringify(parts);
+                        if (el.getAttribute('data-sig') === signature) { return; }
+                        el.setAttribute('data-sig', signature);
+                        var old = el.querySelector('.ucTip');
+                        if (old) { el.removeChild(old); }
+                        el.hidden = !parts.length;
+                        if (!parts.length) { el.removeAttribute('aria-label'); return; }
+                        var tip = document.createElement('span');
+                        tip.className = 'ucTip';
+                        var box = document.createElement('span');
+                        box.className = 'ucTipBox';
+                        parts.forEach(function (part) {
+                            var para = document.createElement('span');
+                            para.className = 'ucTipPara';
+                            if (part.href) {
+                                var link = document.createElement('a');
+                                link.href = part.href;
+                                link.target = '_blank';
+                                link.rel = 'noopener noreferrer';
+                                link.textContent = part.text;
+                                para.appendChild(link);
+                            } else {
+                                para.textContent = part.text;
+                            }
+                            box.appendChild(para);
+                        });
+                        tip.appendChild(box);
+                        el.appendChild(tip);
+                        el.setAttribute('aria-label', parts.map(function (part) { return part.text; }).join(' '));
+                        // The children of an image are hidden from screen readers: an icon that holds a link is a group, so the link can be reached.
+                        el.setAttribute('role', parts.some(function (part) { return !!part.href; }) ? 'group' : 'img');
                     });
                 }
 
@@ -409,7 +601,9 @@
                     el.textContent = text || '';
                     el.hidden = !text;
                     if (isError !== undefined) {
-                        el.style.color = isError ? '#ff8a80' : '';
+                        el.classList.toggle('ucErr', !!isError);
+                        // An error far from the button (the end of a long tab) is brought into view.
+                        if (isError && text && typeof el.scrollIntoView === 'function') { el.scrollIntoView({ block: 'nearest' }); }
                     }
                 }
 
@@ -458,6 +652,77 @@
                     $('ucWarnPublicUrl').hidden = !isHttp('publicUrl');
                     $('ucWarnSeerr').hidden = !isHttp('seerrUrl');
                     $('ucWarnSmtp').hidden = page.querySelector('[data-f="smtpSecurity"]').value !== 'None';
+                    // The hint of the chosen logo mode is in the (i) of the field.
+                    applyHelp();
+                }
+
+                // Only well-formed presets with an https documentation link are kept (anything else is ignored, never shown).
+                function usablePresets(list) {
+                    if (!Array.isArray(list)) { return []; }
+                    return list.filter(function (p) {
+                        return p && typeof p.id === 'string' && p.id && typeof p.name === 'string' && p.name && typeof p.host === 'string' && p.host
+                            && typeof p.port === 'number' && p.port > 0 && PRESET_SECURITY.hasOwnProperty(p.security)
+                            && typeof p.docUrl === 'string' && /^https:\/\/[^\s]/i.test(p.docUrl);
+                    });
+                }
+
+                function presetById(id) {
+                    for (var i = 0; i < presets.length; i++) { if (presets[i].id === id) { return presets[i]; } }
+                    return null;
+                }
+
+                function fieldOf(name) { return page.querySelector('[data-f="' + name + '"]'); }
+
+                // The first preset whose host (any case), port and security are exactly these ones, or null (Custom).
+                function matchPreset(host, port, security) {
+                    for (var i = 0; i < presets.length; i++) {
+                        var preset = presets[i];
+                        if (String(host || '').toLowerCase() === preset.host.toLowerCase() && Number(port) === preset.port && security === PRESET_SECURITY[preset.security]) {
+                            return preset;
+                        }
+                    }
+                    return null;
+                }
+
+                // The list: "Custom" (static option) then one option per preset, the one matching the saved settings selected.
+                function buildProviders(config) {
+                    var select = $('ucSmtpProvider');
+                    while (select.options.length > 1) { select.remove(1); }
+                    presets.forEach(function (preset) {
+                        var option = document.createElement('option');
+                        option.value = preset.id;
+                        option.textContent = preset.name;
+                        select.appendChild(option);
+                    });
+                    var selected = matchPreset(config.smtpHost, config.smtpPort, config.smtpSecurity);
+                    select.value = selected ? selected.id : '';
+                    show('ucSmtpRetypePassword', '');
+                    applyHelp();
+                }
+
+                // After a hand edit of the host, the port or the security: the list and the help follow the fields (nothing else changes).
+                function syncProvider() {
+                    var selected = matchPreset(fieldOf('smtpHost').value, fieldOf('smtpPort').value, fieldOf('smtpSecurity').value);
+                    $('ucSmtpProvider').value = selected ? selected.id : '';
+                    applyHelp();
+                }
+
+                // Fills host, port and security only: nothing is saved, the user name and the password are left alone.
+                function applyPreset(id) {
+                    var preset = presetById(id);
+                    show('ucSmtpRetypePassword', '');
+                    applyHelp();
+                    if (!preset) { return; }
+                    fieldOf('smtpHost').value = preset.host;
+                    fieldOf('smtpPort').value = preset.port;
+                    fieldOf('smtpSecurity').value = PRESET_SECURITY[preset.security];
+                    updateWarnings();
+                    // A stored password does not follow a change of server (the server refuses it): ask for it again.
+                    var password = fieldOf('smtpPassword');
+                    if (storedSmtp.passwordSet && !password.value && preset.host.toLowerCase() !== storedSmtp.host.toLowerCase()) {
+                        show('ucSmtpRetypePassword', s.smtpRetypePassword);
+                        password.focus();
+                    }
                 }
 
                 function fill(config, only) {
@@ -492,7 +757,21 @@
                             el.value = config[key] === null || config[key] === undefined ? '' : config[key];
                         }
                     });
-                    if (!only || only === 'smtp') { $('ucClearSmtpPassword').hidden = !config.smtpPasswordSet; }
+                    if (!only || only === 'smtp') {
+                        $('ucClearSmtpPassword').hidden = !config.smtpPasswordSet;
+                        storedSmtp = { host: String(config.smtpHost || ''), passwordSet: !!config.smtpPasswordSet };
+                        buildProviders(config);
+                    }
+                    // An empty public URL is prefilled with the address published in Jellyfin; nothing is saved until the administrator saves.
+                    if (!only || only === 'general') {
+                        var urlField = fieldOf('publicUrl');
+                        suggestedUrl = '';
+                        if (!String(config.publicUrl || '').trim() && typeof config.suggestedPublicUrl === 'string' && config.suggestedPublicUrl.trim()) {
+                            suggestedUrl = config.suggestedPublicUrl;
+                            urlField.value = suggestedUrl;
+                        }
+                        $('ucPublicUrlSuggested').hidden = !suggestedUrl;
+                    }
                     updateWarnings();
                     if (!only || only === 'templates') {
                         loadedOverrides = Object.assign({}, config.templateOverrides || {});
@@ -584,6 +863,9 @@
                     try { window.sessionStorage.setItem(TAB_KEY, id); } catch (e) { /* not available */ }
                     // The link of a new invitation is shown once: it does not follow the administrator from tab to tab.
                     $('ucInvResult').hidden = true;
+                    // The counters of the accounts and the daily e-mail limits are read each time their tab opens, not only at page load.
+                    if (id === 'accounts') { loadStats(); }
+                    if (id === 'general') { loadStatus().catch(function () { /* the last figures stay; load() reports a failure */ }); }
                 }
 
                 // Shared with Resources/Client/mailconcierge-client.js (invite icon of the Users page): keep the key in sync.
@@ -596,10 +878,46 @@
                     selectTab(id);
                 }
 
+                function textSpan(className, text) {
+                    var span = document.createElement('span');
+                    span.className = className;
+                    span.textContent = text;
+                    return span;
+                }
+
+                // The e-mails counted in the last 24 hours, from the last Status. A limit that stopped an e-mail is said in a banner, in words.
+                function renderQuota(quota) {
+                    var finite = function (n) { return typeof n === 'number' && isFinite(n); };
+                    var valid = !!quota && typeof quota === 'object' && finite(quota.used) && finite(quota.limit) && finite(quota.perRecipientLimit);
+                    $('ucQuota').hidden = !valid;
+                    if (!valid) {
+                        show('ucQuotaBanner', '');
+                        return;
+                    }
+                    show('ucQuotaLine', fmt(s.quotaLine, quota.used, quota.limit, quota.perRecipientLimit));
+                    show('ucQuotaBlocked', finite(quota.recipientsBlocked) && quota.recipientsBlocked > 0 ? fmt(s.quotaBlocked, quota.recipientsBlocked) : '');
+                    var at = typeof quota.limitReachedAt === 'string' ? new Date(quota.limitReachedAt) : null;
+                    show('ucQuotaBanner', at && !isNaN(at.getTime()) ? fmt(s.quotaReached, at.toLocaleString()) : '');
+                }
+
+                // At most one Status request in flight: opening the General tab while one runs joins it instead of sending another.
+                var statusRequest = null;
+
                 function loadStatus() {
+                    if (statusRequest) { return statusRequest; }
+                    var request = statusRequest = loadStatusNow();
+                    var done = function () { if (statusRequest === request) { statusRequest = null; } };
+                    request.then(done, done);
+                    return request;
+                }
+
+                function loadStatusNow() {
                     return api('GET', 'MailConcierge/Admin/Status').then(function (status) {
+                        renderQuota(status.emailQuota);
                         var key = status.proxyGuardTripped ? (REASONS[status.reason] || 'proxyUnknown') : null;
                         show('ucBanner', key ? s[key] : '');
+                        // Turned off (the default of a new install), and not because of the proxy guard: say so, and where to switch it on.
+                        show('ucDisabledBanner', status.serviceOpen === false && !status.proxyGuardTripped ? s.disabledBanner : '');
                         show('ucMailBanner', status.canSendEmail ? '' : s.mailOff);
                         // E-mail sign-in: unavailable when Jellyfin's sign-in action was not recognised (the stored value is left as it is).
                         var emailLoginOk = status.emailLoginAvailable !== false;
@@ -614,6 +932,65 @@
                     });
                 }
 
+                // ---- Accounts tab: e-mails sent per account (in memory on the server, since Jellyfin started).
+
+                var statsTicket = 0;
+
+                function normId(id) { return String(id || '').replace(/-/g, '').toLowerCase(); }
+
+                function localDate(value) {
+                    var date = new Date(value);
+                    return isNaN(date.getTime()) ? '\u2014' : date.toLocaleString();
+                }
+
+                function showStatsUnavailable() {
+                    ['ucStatsSince', 'ucStatsInvitations', 'ucStatsList', 'ucStatsNone'].forEach(function (id) { $(id).hidden = true; });
+                    $('ucStatsUnavailable').hidden = false;
+                }
+
+                // The shape the page relies on: anything else is "unavailable", never a misleading empty list.
+                function validStats(stats) {
+                    var count = function (n) { return typeof n === 'number' && isFinite(n); };
+                    return !!stats && typeof stats === 'object' && Array.isArray(stats.users)
+                        && !!stats.invitations && typeof stats.invitations === 'object' && count(stats.invitations.sent) && count(stats.invitations.failed)
+                        && typeof stats.since === 'string' && !isNaN(new Date(stats.since).getTime());
+                }
+
+                function renderStats(stats, users) {
+                    var names = {};
+                    users.forEach(function (u) { if (u && u.Id) { names[normId(u.Id)] = u.Name; } });
+                    var list = $('ucStatsList');
+                    list.textContent = '';
+                    // An id that no longer has an account is skipped: an identifier is never shown.
+                    (Array.isArray(stats.users) ? stats.users : []).forEach(function (u) {
+                        var name = u && names[normId(u.userId)];
+                        if (!name) { return; }
+                        var item = document.createElement('li');
+                        item.appendChild(textSpan('ucStatName', name));
+                        if (u.sent > 0) { item.appendChild(textSpan('ucStatSent', fmt(s.statsReceived, u.sent, u.lastSentAt ? localDate(u.lastSentAt) : '\u2014'))); }
+                        if (u.failed > 0) { item.appendChild(textSpan('ucStatFailed', fmt(s.statsFailed, u.failed))); }
+                        list.appendChild(item);
+                    });
+                    var inv = stats.invitations || {};
+                    var invitations = (inv.sent || 0) + (inv.failed || 0) > 0;
+                    show('ucStatsSince', fmt(s.statsSince, localDate(stats.since)));
+                    show('ucStatsInvitations', invitations ? fmt(s.statsInvitations, inv.sent || 0, inv.failed || 0) : '');
+                    list.hidden = !list.firstChild;
+                    $('ucStatsNone').hidden = invitations || !!list.firstChild;
+                    $('ucStatsUnavailable').hidden = true;
+                }
+
+                function loadStats() {
+                    var ticket = ++statsTicket;
+                    return Promise.all([api('GET', 'MailConcierge/Admin/EmailStats'), api('GET', 'Users')]).then(function (r) {
+                        if (ticket !== statsTicket) { return; }
+                        if (!validStats(r[0])) { showStatsUnavailable(); return; }
+                        try { renderStats(r[0], Array.isArray(r[1]) ? r[1] : []); } catch (e) { showStatsUnavailable(); }
+                    }, function () {
+                        if (ticket === statsTicket) { showStatsUnavailable(); }
+                    });
+                }
+
                 // Save buttons stay disabled until a load succeeded, so an empty tab can never be saved.
                 var loaded = false;
 
@@ -622,10 +999,16 @@
                     Array.prototype.forEach.call(page.querySelectorAll('form[data-tab-form] button[type="submit"]'), function (b) { b.disabled = !on; });
                 }
 
+                // A failure here only leaves "Custom" in the list: the settings stay usable.
+                function loadPresets() {
+                    return api('GET', 'MailConcierge/Admin/SmtpPresets').then(usablePresets, function () { return []; });
+                }
+
                 function load(only) {
                     Dashboard.showLoadingMsg();
-                    return Promise.all([api('GET', 'MailConcierge/Admin/Templates'), api('GET', 'MailConcierge/Admin/Config'), loadStatus()]).then(function (r) {
+                    return Promise.all([api('GET', 'MailConcierge/Admin/Templates'), api('GET', 'MailConcierge/Admin/Config'), loadStatus(), loadPresets()]).then(function (r) {
                         defaults = r[0] || {};
+                        presets = r[3];
                         fill(r[1], only);
                         setSaveEnabled(true);
                         Dashboard.hideLoadingMsg();
@@ -653,6 +1036,12 @@
                     var args = arguments;
                     return text.replace(/\{(\d)\}/g, function (m, i) { return args[+i + 1]; });
                 }
+
+                // Escape closes an open (i) bubble, also when the focus is on its link.
+                page.addEventListener('keydown', function (event) {
+                    var active = document.activeElement;
+                    if (event.key === 'Escape' && active && active.closest && active.closest('.ucHelp')) { active.blur(); }
+                });
 
                 page.addEventListener('pageshow', function () {
                     TABS.forEach(function (k) { show('ucError-' + k, ''); show('ucSaved-' + k, ''); });
@@ -704,8 +1093,22 @@
                     });
                 });
 
-                page.addEventListener('input', updateWarnings);
-                page.addEventListener('change', updateWarnings);
+                $('ucSmtpProvider').addEventListener('change', function () { applyPreset(this.value); });
+
+                function isSmtpServerField(el) {
+                    return el === fieldOf('smtpHost') || el === fieldOf('smtpPort') || el === fieldOf('smtpSecurity');
+                }
+
+                page.addEventListener('input', function (event) {
+                    // Once the prefilled address is edited, the line saying where it came from no longer applies.
+                    if (suggestedUrl && event.target === fieldOf('publicUrl') && event.target.value !== suggestedUrl) { $('ucPublicUrlSuggested').hidden = true; }
+                    updateWarnings();
+                    if (isSmtpServerField(event.target)) { syncProvider(); }
+                });
+                page.addEventListener('change', function (event) {
+                    updateWarnings();
+                    if (isSmtpServerField(event.target)) { syncProvider(); }
+                });
 
                 $('ucTest').addEventListener('click', function () {
                     show('ucTestResult', '');
@@ -816,18 +1219,39 @@
                     }
                 }
 
-                function invLibraryBoxes() {
-                    return Array.prototype.slice.call($('ucInvLibraries').querySelectorAll('input[type=checkbox]'));
+                function invLiveTvVisible() {
+                    return $('ucInvLiveTvRow').style.display !== 'none';
                 }
 
-                // The "select all" box is ticked exactly when every library is.
+                // The library boxes, plus the Live TV box while it is shown.
+                function invLibraryBoxes() {
+                    var boxes = Array.prototype.slice.call($('ucInvLibraries').querySelectorAll('input[type=checkbox]'));
+                    if (invLiveTvVisible()) { boxes.push($('ucInvLiveTv')); }
+                    return boxes;
+                }
+
+                // The "select all" box is ticked exactly when every shown box is.
                 function syncInvSelectAll() {
                     var boxes = invLibraryBoxes();
                     $('ucInvSelectAll').checked = boxes.length > 0 && boxes.every(function (b) { return b.checked; });
                 }
 
+                // Shows the Live TV row only when the server has Live TV; an error just hides it.
+                function loadInvLiveTv() {
+                    $('ucInvLiveTv').checked = false;
+                    return api('GET', 'MailConcierge/LiveTv').then(function (result) {
+                        return !!(result && result.available);
+                    }, function () {
+                        return false;
+                    }).then(function (available) {
+                        $('ucInvLiveTvRow').style.display = available ? 'flex' : 'none';
+                    });
+                }
+
                 function loadInvLibraries() {
-                    return api('GET', 'MailConcierge/Libraries').then(function (libraries) {
+                    return loadInvLiveTv().then(function () {
+                        return api('GET', 'MailConcierge/Libraries');
+                    }).then(function (libraries) {
                         var box = $('ucInvLibraries');
                         box.textContent = '';
                         $('ucInvSelectAllRow').style.display = libraries.length ? 'block' : 'none';
@@ -884,45 +1308,223 @@
                     icon.setAttribute('aria-hidden', 'true');
                     b.appendChild(icon);
                     b.addEventListener('click', function () {
-                        if (inv.state === 'Pending' && !window.confirm(s['inv.confirmErasePending'])) { return; }
+                        // Erasing cannot be undone: always asked, with the pending-specific wording for a link that still works.
+                        if (!window.confirm(inv.state === 'Pending' ? s['inv.confirmErasePending'] : s['inv.confirmErase'])) { return; }
                         api('DELETE', 'MailConcierge/Invitations/' + inv.id + '?erase=true').then(function () { $('ucInvResult').hidden = true; return loadInvList(); }, function (e) { invErrorOf(e).then(invShowError); });
                     });
                     return b;
                 }
 
-                function loadInvList() {
-                    return api('GET', 'MailConcierge/Invitations').then(function (items) {
-                        var list = $('ucInvList');
-                        list.textContent = '';
-                        $('ucInvEmpty').hidden = items.length > 0;
-                        items.forEach(function (inv) {
-                            var row = document.createElement('div');
-                            row.style.margin = '0.8em 0';
-                            var title = document.createElement('div');
-                            title.style.fontWeight = 'bold';
-                            title.textContent = inv.proposedUsername + (inv.email ? ' <' + inv.email + '>' : '');
-                            var info = document.createElement('div');
-                            info.className = 'fieldDescription';
-                            info.textContent = (s['inv.state.' + inv.state] || inv.state) + ' - ' + s['inv.until'] + ' ' + formatInvDate(inv.expiresAt);
-                            row.appendChild(title);
-                            row.appendChild(info);
-                            if (inv.state === 'Pending' || inv.state === 'Expired') {
-                                row.appendChild(invButton(s['inv.regenerate'], function () {
-                                    api('POST', 'MailConcierge/Invitations/' + inv.id + '/Regenerate').then(function (result) {
-                                        showInvLink(invEmailText(result, inv.email, 'inv.newLinkSent', 'inv.newLink', 'inv.newLinkNotSentLimit'), result.link);
-                                        return loadInvList();
-                                    }, function (e) { invErrorOf(e).then(invShowError); });
-                                }));
-                                row.appendChild(invButton(s['inv.revoke'], function () {
-                                    if (!window.confirm(s['inv.confirmRevoke'])) { return; }
-                                    api('DELETE', 'MailConcierge/Invitations/' + inv.id).then(function () { $('ucInvResult').hidden = true; return loadInvList(); }, function (e) { invErrorOf(e).then(invShowError); });
-                                }));
-                            }
-                            row.appendChild(invEraseButton(inv));
-                            list.appendChild(row);
+                // ---- Invitation history: one list of data, two renderings (table and cards), filtered and sorted in the page.
+
+                var INV_STATES = ['Pending', 'Accepted', 'Expired', 'Revoked'];
+                var INV_STATUS = {
+                    Pending: { color: '#aa5cc3', icon: 'M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01H18V2H6zm10 14.5V20H8v-3.5l4-4 4 4zm-4-5-4-4V4h8v3.5l-4 4z' },
+                    Accepted: { color: '#00a4dc', icon: 'M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z' },
+                    Expired: { color: '#9e9e9e', icon: 'M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z' },
+                    Revoked: { color: '#f44336', icon: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z' }
+                };
+                var invItems = [];
+                var invFilter = 'all';
+                var invQuery = '';
+
+                function invText(key, value) {
+                    // A function as replacement: a name containing "$&" must stay as typed.
+                    return String(s[key]).replace('{0}', function () { return value; });
+                }
+
+                function invStateLabel(state) { return s['inv.state.' + state] || state; }
+
+                function invDateText(inv) {
+                    if (inv.state === 'Revoked') { return s['inv.date.revoked']; }
+                    var key = { Accepted: 'inv.date.accepted', Pending: 'inv.date.pending', Expired: 'inv.date.expired' }[inv.state];
+                    var value = inv.state === 'Accepted' ? inv.acceptedAt : inv.expiresAt;
+                    if (!key) { return ''; }
+                    // A known state with no date to show (an older invitation): a dash, not an empty cell.
+                    return value ? invText(key, formatInvDate(value)) : '\u2014';
+                }
+
+                function invSortedItems(items) {
+                    var stamp = function (inv) { var n = Date.parse(inv.createdAt); return isNaN(n) ? 0 : n; };
+                    return items.map(function (inv, index) { return { inv: inv, index: index }; }).sort(function (a, b) {
+                        var pa = a.inv.state === 'Pending' ? 0 : 1;
+                        var pb = b.inv.state === 'Pending' ? 0 : 1;
+                        return (pa - pb) || (stamp(b.inv) - stamp(a.inv)) || (a.index - b.index);
+                    }).map(function (e) { return e.inv; });
+                }
+
+                function invMatches(inv) {
+                    if (invFilter !== 'all' && inv.state !== invFilter) { return false; }
+                    if (!invQuery) { return true; }
+                    return String(inv.proposedUsername || '').toLowerCase().indexOf(invQuery) >= 0
+                        || String(inv.email || '').toLowerCase().indexOf(invQuery) >= 0;
+                }
+
+                function invStatusNode(inv) {
+                    var info = INV_STATUS[inv.state];
+                    var label = document.createElement('span');
+                    label.className = 'ucInvStatus';
+                    if (info) {
+                        // The word keeps the theme colour; the border and the icon carry the status colour.
+                        label.style.borderColor = info.color;
+                        var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                        svg.setAttribute('viewBox', '0 0 24 24');
+                        svg.setAttribute('fill', 'currentColor');
+                        svg.setAttribute('aria-hidden', 'true');
+                        svg.setAttribute('focusable', 'false');
+                        svg.style.color = info.color;
+                        var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        path.setAttribute('d', info.icon);
+                        svg.appendChild(path);
+                        label.appendChild(svg);
+                    } else {
+                        label.style.borderColor = 'rgba(128,128,128,0.9)';
+                    }
+                    var word = document.createElement('span');
+                    word.textContent = invStateLabel(inv.state);
+                    label.appendChild(word);
+                    return label;
+                }
+
+                function invAccessNode(inv) {
+                    var box = document.createElement('div');
+                    box.className = 'ucInvAccess';
+                    var pill = function (text, extraClass) {
+                        var p = document.createElement('span');
+                        p.className = 'ucInvPill' + (extraClass ? ' ' + extraClass : '');
+                        p.textContent = text;
+                        box.appendChild(p);
+                    };
+                    (Array.isArray(inv.libraries) ? inv.libraries : []).forEach(function (name) { pill(name); });
+                    if (inv.liveTv === true) {
+                        pill(s['inv.liveTv'], 'ucInvPillTv');
+                        box.lastChild.style.borderColor = '#00a4dc';
+                    }
+                    if (!box.firstChild) {
+                        var none = document.createElement('span');
+                        none.className = 'ucInvNone';
+                        // "None" is a fact only when Live TV was refused; with Live TV unknown (an older invitation) the access is not known.
+                        none.textContent = inv.liveTv === false ? s['inv.noAccess'] : '\u2014';
+                        box.appendChild(none);
+                    }
+                    return box;
+                }
+
+                function invUserNode(inv) {
+                    var box = document.createElement('div');
+                    var name = document.createElement('div');
+                    name.className = 'ucInvName';
+                    if (inv.userId) {
+                        var link = document.createElement('a');
+                        link.href = '#/dashboard/users/' + encodeURIComponent(inv.userId) + '/profile';
+                        link.title = invText('inv.openProfile', inv.proposedUsername);
+                        link.textContent = inv.proposedUsername;
+                        name.appendChild(link);
+                    } else {
+                        name.textContent = inv.proposedUsername;
+                    }
+                    var sub = document.createElement('div');
+                    sub.className = 'ucInvSub';
+                    sub.textContent = inv.email || s['inv.noEmail'];
+                    box.appendChild(name);
+                    box.appendChild(sub);
+                    return box;
+                }
+
+                function invDateNode(inv) {
+                    var d = document.createElement('div');
+                    d.className = 'ucInvDate';
+                    d.textContent = invDateText(inv);
+                    return d;
+                }
+
+                function invActionsNode(inv) {
+                    var row = document.createElement('div');
+                    row.className = 'ucInvActions';
+                    if (inv.state === 'Pending' || inv.state === 'Expired') {
+                        row.appendChild(invButton(s['inv.regenerate'], function () {
+                            api('POST', 'MailConcierge/Invitations/' + inv.id + '/Regenerate').then(function (result) {
+                                showInvLink(invEmailText(result, inv.email, 'inv.newLinkSent', 'inv.newLink', 'inv.newLinkNotSentLimit'), result.link);
+                                return loadInvList();
+                            }, function (e) { invErrorOf(e).then(invShowError); });
+                        }));
+                        row.appendChild(invButton(s['inv.revoke'], function () {
+                            if (!window.confirm(s['inv.confirmRevoke'])) { return; }
+                            api('DELETE', 'MailConcierge/Invitations/' + inv.id).then(function () { $('ucInvResult').hidden = true; return loadInvList(); }, function (e) { invErrorOf(e).then(invShowError); });
+                        }));
+                    }
+                    row.appendChild(invEraseButton(inv));
+                    return row;
+                }
+
+                // The filter buttons are created once and updated in place (the one with the focus keeps it).
+                function renderInvFilters() {
+                    var box = $('ucInvFilters');
+                    box.setAttribute('aria-label', s['inv.col.status']);
+                    var keys = ['all'].concat(INV_STATES);
+                    if (box.children.length !== keys.length) {
+                        box.textContent = '';
+                        keys.forEach(function (key) {
+                            var b = document.createElement('button');
+                            b.type = 'button';
+                            b.className = 'ucInvFilter';
+                            b.addEventListener('click', function () { invFilter = key; renderInvList(); });
+                            box.appendChild(b);
                         });
+                    }
+                    keys.forEach(function (key, i) {
+                        var count = key === 'all' ? invItems.length : invItems.filter(function (inv) { return inv.state === key; }).length;
+                        var b = box.children[i];
+                        b.textContent = (key === 'all' ? s['inv.filter.all'] : invStateLabel(key)) + ' (' + count + ')';
+                        b.setAttribute('aria-pressed', invFilter === key ? 'true' : 'false');
                     });
                 }
+
+                // One function feeds the table and the cards.
+                function renderInvList() {
+                    $('ucInvEmpty').hidden = invItems.length > 0;
+                    $('ucInvHistory').hidden = invItems.length === 0;
+                    var search = $('ucInvSearch');
+                    search.placeholder = s['inv.search'];
+                    search.setAttribute('aria-label', s['inv.search']);
+                    renderInvFilters();
+                    var shown = invSortedItems(invItems).filter(invMatches);
+                    var body = $('ucInvTable').querySelector('tbody');
+                    var cards = $('ucInvCards');
+                    body.textContent = '';
+                    cards.textContent = '';
+                    shown.forEach(function (inv) {
+                        var row = document.createElement('tr');
+                        row.setAttribute('data-id', inv.id);
+                        [invUserNode(inv), invStatusNode(inv), invAccessNode(inv), invDateNode(inv), invActionsNode(inv)].forEach(function (node) {
+                            var cell = document.createElement('td');
+                            cell.appendChild(node);
+                            row.appendChild(cell);
+                        });
+                        body.appendChild(row);
+
+                        var card = document.createElement('article');
+                        card.className = 'ucInvCard';
+                        card.setAttribute('data-id', inv.id);
+                        [invUserNode(inv), invStatusNode(inv), invAccessNode(inv), invDateNode(inv), invActionsNode(inv)].forEach(function (node) { card.appendChild(node); });
+                        cards.appendChild(card);
+                    });
+                    var noMatch = $('ucInvNoMatch');
+                    noMatch.textContent = s['inv.noMatch'];
+                    noMatch.hidden = invItems.length === 0 || shown.length > 0;
+                }
+
+                function loadInvList() {
+                    return api('GET', 'MailConcierge/Invitations').then(function (items) {
+                        invItems = Array.isArray(items) ? items : [];
+                        renderInvList();
+                    });
+                }
+
+                $('ucInvSearch').addEventListener('input', function () {
+                    invQuery = $('ucInvSearch').value.trim().toLowerCase();
+                    renderInvList();
+                });
 
                 // The sentence for the outcome of an invitation e-mail: sent, or the reason it was not.
                 function invEmailText(result, address, sentKey, otherKey, limitKey) {
@@ -941,6 +1543,7 @@
 
                 $('ucInvEmail').addEventListener('input', updateInvSubmitLabel);
                 $('ucInvCopy').addEventListener('click', copyInvLink);
+                $('ucInvLiveTv').addEventListener('change', syncInvSelectAll);
                 $('ucInvSelectAll').addEventListener('change', function () {
                     var on = $('ucInvSelectAll').checked;
                     invLibraryBoxes().forEach(function (b) { b.checked = on; });
@@ -959,6 +1562,7 @@
                         proposedUsername: $('ucInvUsername').value.trim(),
                         email: email || null,
                         libraryIds: libraryIds,
+                        liveTv: invLiveTvVisible() && $('ucInvLiveTv').checked,
                         days: isNaN(days) ? null : days,
                         language: $('ucInvLanguage').value
                     }).then(function (result) {
@@ -972,6 +1576,10 @@
                         $('ucInvUsername').value = '';
                         $('ucInvEmail').value = '';
                         updateInvSubmitLabel();
+                        // The new invitation must be in sight: no status filter and no search left over.
+                        invFilter = 'all';
+                        invQuery = '';
+                        $('ucInvSearch').value = '';
                         return loadInvList();
                     }, function (response) {
                         Dashboard.hideLoadingMsg();

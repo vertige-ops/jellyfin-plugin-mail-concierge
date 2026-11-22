@@ -42,12 +42,12 @@ public sealed class RecoveryServiceTests : IDisposable
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 31, 12, 0, 0, TimeSpan.Zero));
     private readonly PluginConfiguration _config = new()
     {
+        Enabled = true,
         PublicUrl = "https://jf.example/",
         SmtpHost = "smtp.example",
         FromAddress = "jf@example.com",
-        MaxRecoveryEmailsPerHour = 100,
-        MaxInvitationEmailsPerHour = 100,
-        MaxAccountEmailsPerHour = 100,
+        MaxEmailsPerRecipientPerDay = 100,
+        MaxEmailsPerDay = 100,
         MaxForgotRequestsPerIpPer15Min = 100,
     };
 
@@ -70,7 +70,7 @@ public sealed class RecoveryServiceTests : IDisposable
         _store = new MailConciergeStore(_dir);
         _tokens = new TokenService(_dir);
         var limiter = new RateLimiter(_time);
-        _queue = new EmailQueue(() => _config, _transport, limiter, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero });
+        _queue = new EmailQueue(() => _config, _transport, NullLogger<EmailQueue>.Instance, _time, new[] { TimeSpan.Zero });
         _queue.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         var serverConfig = new Mock<IServerConfigurationManager>();
         serverConfig.Setup(c => c.GetConfiguration("network")).Returns(new NetworkConfiguration { KnownProxies = Array.Empty<string>() });
@@ -136,7 +136,7 @@ public sealed class RecoveryServiceTests : IDisposable
         Assert.Equal("bob@example.org", mail.To);
         Assert.Equal("recovery", mail.Template);
         Assert.Matches(@"\b\d{4}-\d{4}\b", mail.Text);
-        Assert.Contains("https://jf.example/MailConcierge/Reset?t=", mail.Text, StringComparison.Ordinal);
+        Assert.Contains("https://jf.example/MailConcierge/Reset#t=", mail.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("//MailConcierge", mail.Text, StringComparison.Ordinal);
         Assert.Matches(@"\d{4} 12:30", mail.Text);
         Assert.Contains("PIN code", mail.Text, StringComparison.Ordinal);
@@ -598,7 +598,7 @@ public sealed class RecoveryServiceTests : IDisposable
         Assert.Equal(mails[0].Subject, mails[1].Subject);
         Assert.Contains("bob", mails[1].Text, StringComparison.Ordinal);
         Assert.Matches(@"\b\d{4}-\d{4}\b", mails[1].Text);
-        Assert.Contains("https://jf.example/MailConcierge/Reset?t=", mails[1].Text, StringComparison.Ordinal);
+        Assert.Contains("https://jf.example/MailConcierge/Reset#t=", mails[1].Text, StringComparison.Ordinal);
         Assert.Equal(1, await _store.ReadAsync(d => d.Tokens.Count(t => t.Purpose == TokenPurpose.ResetPin)));
     }
 
@@ -797,7 +797,7 @@ public sealed class RecoveryServiceTests : IDisposable
 
     private static string PinOf(EmailMessage m) => Regex.Match(m.Text, @"\d{4}-\d{4}").Value;
 
-    private static string LinkOf(EmailMessage m) => Regex.Match(m.Text, @"[?]t=([\w-]+)").Groups[1].Value;
+    private static string LinkOf(EmailMessage m) => Regex.Match(m.Text, @"#t=([\w-]+)").Groups[1].Value;
 
     private void ReplaceEmail(User user, string address, bool confirmed)
         => _store.WriteAsync(d =>

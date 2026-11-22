@@ -24,7 +24,7 @@ public class HelpTooltipsTests
     {
         var html = ReadResource("Jellyfin.Plugin.MailConcierge.Configuration.configPage.html");
         return Regex.Matches(html, "<span\\b[^>]*\\bdata-help=\"([^\"]*)\"[^>]*>")
-            .Select(m => m.Groups[1].Value)
+            .SelectMany(m => m.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
             .ToList();
     }
 
@@ -36,15 +36,33 @@ public class HelpTooltipsTests
         {
             "help.publicUrl", "help.defaultLanguage", "help.allowAdministrators", "help.emailLogin", "help.sessionsOnReset", "help.sessionDays",
             "help.smtpSecurity", "help.fromAddress", "help.invitationDays", "help.pinMinutes", "help.confirmationHours",
-            "help.cancelHours", "help.maxRecoveryHour", "help.maxInvitationHour", "help.maxAccountHour", "help.maxAccount", "help.maxIp", "help.maxPin", "help.templates",
-            "help.seerrUrl", "help.seerrApiKey", "help.assignProvider",
+            "help.cancelHours", "help.maxEmailsPerRecipient", "help.maxEmailsPerDay", "help.adminNotificationAddress", "help.maxIp", "help.maxPin", "help.templates",
+            "help.seerrUrl", "help.seerrApiKey", "help.assignProvider", "help.smtpProvider",
+
+            // Former paragraphs under the fields, now in the icon of the field.
+            "enabledHint", "publicUrlHint", "allowAdminsHint", "nativeHint", "secretHint", "testHint", "defaultLanguageHint", "templatesHint", "seerrToolsHint", "assignHint",
+            "inv.emailHint", "inv.liveTvHint", "inv.historyHint",
         };
         foreach (var key in expected)
         {
             Assert.Contains(key, keys);
         }
 
-        Assert.Equal(keys.Count, keys.Distinct(StringComparer.Ordinal).Count());
+        // A key may appear in two icons (the write-only note of the two passwords); an icon never repeats one.
+        foreach (Match m in Regex.Matches(ReadResource("Jellyfin.Plugin.MailConcierge.Configuration.configPage.html"), "<span\\b[^>]*\\bdata-help=\"([^\"]*)\"[^>]*>"))
+        {
+            var own = m.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(own.Length, own.Distinct(StringComparer.Ordinal).Count());
+        }
+    }
+
+    [Fact]
+    public void ConfigPage_HasNoStaticExplanationUnderAField_OnlyStatusLinesWithAnId()
+    {
+        // Explanations live in the (i) of their field; what stays under a field is a status or a warning that the page shows and hides, and has an id.
+        var html = ReadResource("Jellyfin.Plugin.MailConcierge.Configuration.configPage.html");
+        var loose = Regex.Matches(html, "<(?:div|p)\\b(?![^>]*\\bid=)[^>]*class=\"[^\"]*fieldDescription[^\"]*\"[^>]*>");
+        Assert.Empty(loose.Select(m => m.Value));
     }
 
     [Fact]
@@ -63,7 +81,7 @@ public class HelpTooltipsTests
         // Same row as the label (not at the end of the line), and never inside the label: a checkbox label would swallow the hover.
         var html = ReadResource("Jellyfin.Plugin.MailConcierge.Configuration.configPage.html");
         var icons = Regex.Matches(html, "<span class=\"ucHelp ucHelpField\"[^>]*></span>").Count;
-        var rows = Regex.Matches(html, "<div class=\"ucHelpRow\"><label\\b[^>]*>.*?</label><span class=\"ucHelp ucHelpField\"[^>]*></span></div>").Count;
+        var rows = Regex.Matches(html, "<div\\b[^>]*\\bclass=\"ucHelpRow\"[^>]*>\\s*<label\\b[^>]*>.*?</label>\\s*<span class=\"ucHelp ucHelpField\"[^>]*></span>", RegexOptions.Singleline).Count;
         Assert.True(icons > 0);
         Assert.Equal(icons, rows);
     }
@@ -106,8 +124,8 @@ public class HelpTooltipsTests
             foreach (var key in keys)
             {
                 Assert.True(
-                    doc.RootElement.TryGetProperty("cfg." + key, out var value) && !string.IsNullOrWhiteSpace(value.GetString()),
-                    $"cfg.{key} missing or empty in {language.Code}.json");
+                    doc.RootElement.TryGetProperty(key.StartsWith("inv.", StringComparison.Ordinal) ? key : "cfg." + key, out var value) && !string.IsNullOrWhiteSpace(value.GetString()),
+                    $"{key} missing or empty in {language.Code}.json");
             }
         }
     }
